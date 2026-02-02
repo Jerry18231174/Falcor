@@ -63,7 +63,11 @@ struct detect<T, Op, std::void_t<Op<T>>> : std::true_type
 {};
 
 class DummyArchive
-{};
+{
+public:
+    template<typename... Args>
+    void operator()(Args&&...) {}
+};
 
 template<typename T>
 using serialize_t = decltype(&T::template serialize<DummyArchive>);
