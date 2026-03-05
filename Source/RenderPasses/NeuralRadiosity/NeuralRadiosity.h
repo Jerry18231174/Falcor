@@ -54,18 +54,22 @@ public:
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
 private:
+    void firstSmooth(RenderContext* pRenderContext, const RenderData& renderData);
+    void coneTrace(RenderContext* pRenderContext, const RenderData& renderData);
 
     void updateFrameDim(const uint2 frameDim);
-    void bindShaderData(ShaderVar& var, const RenderData& renderData);
+    void bindShaderData(ShaderVar& var, const RenderData& renderData, const std::string &name);
     DefineList getShaderDefines(const RenderData& renderData) const;
 
     // Internal state
     ref<Scene> mpScene;
     ref<ComputePass> mpFirstSmoothPass;
+    ref<ComputePass> mpConeTracePass;
     ref<SampleGenerator> mpSampleGenerator;
 
     uint32_t mFrameCount = 0;
     uint2 mFrameDim = {};
+    bool mVarsChanged = false;
 
     /// Enable alpha test.
     bool mUseAlphaTest = true;
@@ -77,6 +81,17 @@ private:
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
     RasterizerState::CullMode mCullMode = RasterizerState::CullMode::Back;
+
+    // Resources
+    /// Cluster mean, standard deviation, and size
+    ref<Buffer> mpClusterMean;
+    ref<Buffer> mpClusterStd;
+    ref<Buffer> mpClusterSize;
+
+    // Algorithm parameters
+    uint32_t mNumSpecRays = 128;
+    uint32_t mNumClusters = 4;
+    uint32_t mNumKMeansIter = 10;
 
     // UI variables
     RenderPassHelpers::IOSize mOutputSizeSelection = RenderPassHelpers::IOSize::Default;

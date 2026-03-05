@@ -4,13 +4,12 @@ import PathState;
 import LoadShadingData;
 
 // Input channels
-// RWTexture2D<PackedHitInfo> gVBuffer;
-// RWTexture2D<float4> gViewW;
 
 // Output channels
 RWTexture2D<PackedHitInfo> gVBuffer;
 RWTexture2D<float4> gFSThp;
 RWTexture2D<uint> gActive;
+RWTexture2D<float4> gColor;
 
 // Output G-Buffer channels
 RWTexture2D<float4> gPos;
@@ -35,6 +34,7 @@ struct FirstSmooth
     static const float kEnvMapDepth = 100000000.0f; // Arbitrary big number
     static const int kMaxRecursionDepth = 16;
     static const float kSpecularRoughnessThreshold = 0.5f;
+    static const uint kRandomBase = 2654435761u;
 
     uint2 frameDim = {};
     uint frameCount = 0;
@@ -46,7 +46,7 @@ struct FirstSmooth
         path.thp = float3(1.f);
 
         // Create sample generator.
-        path.sg = SampleGenerator(pixel, frameCount + path.getSampleIdx());
+        path.sg = SampleGenerator(pixel, frameCount * kRandomBase);
 
         // Unspecified:
         // - path.origin
@@ -135,7 +135,7 @@ struct FirstSmooth
         // Trace rays.
         SceneRayQuery<FirstSmooth::kUseAlphaTest> sceneRayQuery;
         HitInfo hit;
-        float3 thp = float3(0.f);
+        float3 color = float3(0.f);
 
         // G-Buffer values.
         float3 pos = float3(0.f);
@@ -143,6 +143,7 @@ struct FirstSmooth
         float3 normal = float3(0.f);
         float3 albedo = float3(0.f);
         float roughness = 0.f;
+        float3 thp = float3(0.f);
 
         // Initialize path state.
         PathState path = {};
@@ -158,7 +159,7 @@ struct FirstSmooth
             {
                 if (kUseEnvLight)
                 {
-                    thp = gScene.envMap.eval(ray.dir) * path.thp;
+                    color = gScene.envMap.eval(ray.dir) * path.thp;
                 }
                 path.terminate();
                 break;
@@ -183,7 +184,7 @@ struct FirstSmooth
             // Emissive surface: terminate path and write emitted radiance.
             if (any(bsdfProperties.emission > 0.f))
             {
-                thp = bsdfProperties.emission * path.thp;
+                color = bsdfProperties.emission * path.thp;
                 path.terminate();
                 break;
             }
@@ -224,24 +225,17 @@ struct FirstSmooth
         }
 
         // Write outputs
-        if (is_valid(gVBuffer))
-            gVBuffer[pixel] = hit.pack();
-        if (is_valid(gFSThp))
-            gFSThp[pixel] = float4(thp, 0.f);
-        if (is_valid(gActive))
-            gActive[pixel] = path.isActive();
+        gColor[pixel] = float4(color, 0.f);
+        gVBuffer[pixel] = hit.pack();
+        gFSThp[pixel] = float4(thp, 0.f);
+        gActive[pixel] = path.isActive();
 
         // Write G-Buffer
-        if (is_valid(gPos))
-            gPos[pixel] = float4(pos, 1.f);
-        if (is_valid(gDir))
-            gDir[pixel] = float4(dir, 0.f);
-        if (is_valid(gNormal))
-            gNormal[pixel] = float4(normal, 0.f);
-        if (is_valid(gAlbedo))
-            gAlbedo[pixel] = float4(albedo, 0.f);
-        if (is_valid(gRoughness))
-            gRoughness[pixel] = roughness;
+        gPos[pixel] = float4(pos, 1.f);
+        gDir[pixel] = float4(dir, 0.f);
+        gNormal[pixel] = float4(normal, 0.f);
+        gAlbedo[pixel] = float4(albedo, 0.f);
+        gRoughness[pixel] = roughness;
     }
 };
 

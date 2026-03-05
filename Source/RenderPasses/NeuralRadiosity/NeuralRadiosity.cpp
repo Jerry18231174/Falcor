@@ -26,6 +26,8 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #include "NeuralRadiosity.h"
+#include <thread>
+#include <chrono>
 
 namespace
 {
@@ -37,6 +39,7 @@ namespace
         // { kInputViewDir,        "gViewW",           "World-space view direction (xyz float format)", true /* optional */ },
     };
 
+    const std::string kOutputColor = "color";
     const std::string kOutputVBuffer = "vbuffer";
     const std::string kOutputFSThp = "fsThp";
     const std::string kOutputActive = "active";
@@ -48,18 +51,20 @@ namespace
 
     const Falcor::ChannelList kOutputChannels =
     {
-        { kOutputVBuffer,       "gVBuffer",     "Visibility buffer in packed format", true,   ResourceFormat::RGBA32Uint },
-        { kOutputFSThp,         "gFSThp",       "First smooth throughput",            true,   ResourceFormat::RGBA32Float },
-        { kOutputActive,        "gActive",      "If the pixel is active",             true,   ResourceFormat::R32Uint },
-        { kOutputPos,           "gPos",         "Output position",                    true,   ResourceFormat::RGBA32Float },
-        { kOutputDir,           "gDir",         "Output direction",                   true,   ResourceFormat::RGBA32Float },
-        { kOutputNormal,        "gNormal",      "Output normal",                      true,   ResourceFormat::RGBA32Float },
-        { kOutputAlbedo,        "gAlbedo",      "Output albedo",                      true,   ResourceFormat::RGBA32Float },
-        { kOutputRoughness,     "gRoughness",   "Output roughness",                   true,   ResourceFormat::R32Float },
+        { kOutputColor,         "gColor",       "Output color",                       false,  ResourceFormat::RGBA32Float },
+        { kOutputVBuffer,       "gVBuffer",     "Visibility buffer in packed format", false,  ResourceFormat::RGBA32Uint },
+        { kOutputFSThp,         "gFSThp",       "First smooth throughput",            false,  ResourceFormat::RGBA32Float },
+        { kOutputActive,        "gActive",      "If the pixel is active",             false,  ResourceFormat::R32Uint },
+        { kOutputPos,           "gPos",         "Output position",                    false,  ResourceFormat::RGBA32Float },
+        { kOutputDir,           "gDir",         "Output direction",                   false,  ResourceFormat::RGBA32Float },
+        { kOutputNormal,        "gNormal",      "Output normal",                      false,  ResourceFormat::RGBA32Float },
+        { kOutputAlbedo,        "gAlbedo",      "Output albedo",                      false,  ResourceFormat::RGBA32Float },
+        { kOutputRoughness,     "gRoughness",   "Output roughness",                   false,  ResourceFormat::R32Float },
     };
 
     // Program files.
-    const std::string kProgramComputeFile = "RenderPasses/NeuralRadiosity/FirstSmooth.cs.slang";
+    const std::string kFirstSmoothFile = "RenderPasses/NeuralRadiosity/FirstSmooth.cs.slang";
+    const std::string kConeTraceFile = "RenderPasses/NeuralRadiosity/ConeTrace.cs.slang";
 }
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -107,12 +112,41 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
         return;
     }
 
-    // Create compute pass.
+    // First smooth pass.
+    firstSmooth(pRenderContext, renderData);
+
+    // Cone tracing pass.
+    coneTrace(pRenderContext, renderData);
+
+    // Parameter update pass.
+
+    // Model querying: CUDA kernel.
+
+    // Resolve pass. (optional)
+
+    mFrameCount++;
+    mVarsChanged = false;
+}
+
+void NeuralRadiosity::renderUI(Gui::Widgets& widget)
+{}
+
+void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
+{
+    mpScene = pScene;
+    mpFirstSmoothPass = nullptr;
+    mpConeTracePass = nullptr;
+}
+
+// Private methods
+
+void NeuralRadiosity::firstSmooth(RenderContext* pRenderContext, const RenderData& renderData)
+{
     if (!mpFirstSmoothPass)
     {
         ProgramDesc desc;
         desc.addShaderModules(mpScene->getShaderModules());
-        desc.addShaderLibrary(kProgramComputeFile).csEntry("main");
+        desc.addShaderLibrary(kFirstSmoothFile).csEntry("main");
         desc.addTypeConformances(mpScene->getTypeConformances());
 
         DefineList defines;
@@ -126,35 +160,96 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
         ShaderVar var = mpFirstSmoothPass->getRootVar();
         mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
         mpSampleGenerator->bindShaderData(var);
+
+        mVarsChanged = true;
     }
 
     ShaderVar var = mpFirstSmoothPass->getRootVar();
-    bindShaderData(var, renderData);
+    bindShaderData(var, renderData, "gFirstSmooth");
 
     mpFirstSmoothPass->execute(pRenderContext, uint3(mFrameDim, 1));
-    mFrameCount++;
 }
 
-void NeuralRadiosity::renderUI(Gui::Widgets& widget)
-{}
-
-void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
+void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    mpScene = pScene;
-    mpFirstSmoothPass = nullptr;
+    if (!mpConeTracePass)
+    {
+        ProgramDesc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kConeTraceFile).csEntry("main");
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        defines.add(getShaderDefines(renderData));
+        // Add cone trace parameters
+        defines.add("NUM_SPEC_RAYS", std::to_string(mNumSpecRays));
+        defines.add("NUM_CLUSTERS", std::to_string(mNumClusters));
+
+        mpConeTracePass = ComputePass::create(mpDevice, desc, defines, true);
+
+        // Bind static resources
+        ShaderVar var = mpConeTracePass->getRootVar();
+        mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
+
+        mVarsChanged = true;
+    }
+
+    ShaderVar var = mpConeTracePass->getRootVar();
+    const auto name = "gConeTrace";
+    const uint32_t totalClusters = mNumClusters * mFrameDim.x * mFrameDim.y;
+
+    bindShaderData(var, renderData, name);
+    var[name]["numKMeansIters"] = mNumKMeansIter;
+
+    // Create cluster buffers
+    if (!mpClusterMean || !mpClusterStd || !mpClusterSize || mVarsChanged)
+    {
+        mpClusterMean = mpDevice->createStructuredBuffer(
+            var["gClusterMean"], totalClusters,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            MemoryType::DeviceLocal,
+            nullptr, false
+        );
+        mpClusterStd = mpDevice->createStructuredBuffer(
+            var["gClusterStd"], totalClusters,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            MemoryType::DeviceLocal,
+            nullptr, false
+        );
+        mpClusterSize = mpDevice->createStructuredBuffer(
+            var["gClusterSize"], totalClusters,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            MemoryType::DeviceLocal,
+            nullptr, false
+        );
+        mVarsChanged = true;
+    }
+    var["gClusterMean"] = mpClusterMean;
+    var["gClusterStd"] = mpClusterStd;
+    var["gClusterSize"] = mpClusterSize;
+
+    mpConeTracePass->execute(pRenderContext, uint3(mFrameDim.x * mFrameDim.y * mNumSpecRays, 1, 1));
 }
 
 void NeuralRadiosity::updateFrameDim(const uint2 frameDim)
 {
     FALCOR_ASSERT(frameDim.x > 0 && frameDim.y > 0);
+
+    if (any(mFrameDim != frameDim))
+    {
+        mVarsChanged = true;
+    }
     mFrameDim = frameDim;
 }
 
-void NeuralRadiosity::bindShaderData(ShaderVar& var, const RenderData& renderData)
+void NeuralRadiosity::bindShaderData(ShaderVar& var, const RenderData& renderData, const std::string& name)
 {
     // Bind parameters
-    var["gFirstSmooth"]["frameDim"] = mFrameDim;
-    var["gFirstSmooth"]["frameCount"] = mFrameCount;
+    var[name]["frameDim"] = mFrameDim;
+    var[name]["frameCount"] = mFrameCount;
     // Bind input & output textures
     for (const auto& channel : kInputChannels)
         var[channel.texname] = renderData.getTexture(channel.name);

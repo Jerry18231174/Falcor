@@ -3,7 +3,10 @@ add_plugin(NeuralRadiosity)
 target_sources(NeuralRadiosity PRIVATE
     NeuralRadiosity.cpp
     NeuralRadiosity.h
+
     FirstSmooth.cs.slang
+    ConeTrace.cs.slang
+
     LoadShadingData.slang
     PathState.slang
 )

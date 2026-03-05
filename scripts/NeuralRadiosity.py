@@ -8,11 +8,13 @@ def render_graph_PathTracer():
     ToneMapper = createPass("ToneMapper", {'autoExposure': False, 'exposureCompensation': 0.0})
     g.addPass(ToneMapper, "ToneMapper")
 
-    g.addEdge("NeuralRadiosity.fsThp", "ToneMapper.src")
+    g.addEdge("NeuralRadiosity.color", "ToneMapper.src")
 
     g.markOutput("NeuralRadiosity.fsThp")
     g.markOutput("NeuralRadiosity.normal")
     g.markOutput("NeuralRadiosity.albedo")
+    g.markOutput("NeuralRadiosity.roughness")
+    # g.markOutput("NeuralRadiosity.active")
     g.markOutput("ToneMapper.dst")
 
     return g

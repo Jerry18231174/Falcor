@@ -451,7 +451,7 @@ float2 getRoughness(
         return fallback;
     }
 
-    float2 roughness{uroughness->getConstant() + vroughness->getConstant()};
+    float2 roughness{uroughness->getConstant(), vroughness->getConstant()};
 
     // "remaproughness" determines if roughness represents a "linear" roughness value and should be converted to the NDF "alpha" value.
     // PBRT always uses the Trowbridge-Reitz / GGX NDF.
