@@ -7,7 +7,6 @@ import LoadShadingData;
 
 // Output channels
 RWTexture2D<PackedHitInfo> gVBuffer;
-RWTexture2D<float4> gFSThp;
 RWTexture2D<uint> gActive;
 RWTexture2D<float4> gColor;
 
@@ -18,14 +17,36 @@ RWTexture2D<float4> gNormal;
 RWTexture2D<float4> gAlbedo;
 RWTexture2D<float> gRoughness;
 
+// Active buffers
+RWStructuredBuffer<uint> diffActive;
+RWStructuredBuffer<uint> diffIndex;
+RWStructuredBuffer<uint> specActive;
+RWStructuredBuffer<uint> specIndex;
+
 
 #define is_valid(name) (is_valid_##name != 0)
 
-#if !defined(USE_ALPHA_TEST) || !defined(ADJUST_SHADING_NORMALS) || !defined(USE_ENV_LIGHT) || !defined(RAY_FLAGS)
-#error "Not all defines are set!"
+#ifndef USE_ALPHA_TEST
+#define USE_ALPHA_TEST true
 #endif
 
-struct FirstSmooth
+#ifndef ADJUST_SHADING_NORMALS
+#define ADJUST_SHADING_NORMALS true
+#endif
+
+#ifndef USE_ENV_LIGHT
+#define USE_ENV_LIGHT true
+#endif
+
+#ifndef RAY_FLAGS
+#define RAY_FLAGS true
+#endif
+
+#ifndef SPECULAR_ROUGHNESS_THRESHOLD
+#define SPECULAR_ROUGHNESS_THRESHOLD 0.5f
+#endif
+
+struct FirstSmoothPass
 {
     static const bool kUseAlphaTest = USE_ALPHA_TEST;
     static const bool kAdjustShadingNormals = ADJUST_SHADING_NORMALS;
@@ -33,7 +54,7 @@ struct FirstSmooth
     static const uint kRayFlags = RAY_FLAGS;
     static const float kEnvMapDepth = 100000000.0f; // Arbitrary big number
     static const int kMaxRecursionDepth = 16;
-    static const float kSpecularRoughnessThreshold = 0.5f;
+    static const float kSpecularRoughnessThreshold = SPECULAR_ROUGHNESS_THRESHOLD;
     static const uint kRandomBase = 2654435761u;
 
     uint2 frameDim = {};
@@ -46,7 +67,7 @@ struct FirstSmooth
         path.thp = float3(1.f);
 
         // Create sample generator.
-        path.sg = SampleGenerator(pixel, frameCount * kRandomBase);
+        path.sg = SampleGenerator(pixel, frameCount);
 
         // Unspecified:
         // - path.origin
@@ -54,86 +75,17 @@ struct FirstSmooth
         // - path.setHit(hit);
     }
 
-    /** Generates a new scatter ray given a valid BSDF sample.
-        \param[in] bs BSDF sample (assumed to be valid).
-        \param[in] sd Shading data.
-        \param[in] mi Material instance at the shading point.
-        \param[in,out] path The path state.
-        \return True if a ray was generated, false otherwise.
-    */
-    bool generateScatterRay(const BSDFSample bs, const ShadingData sd, const IMaterialInstance mi, inout PathState path)
-    {
-        const bool isTriangleHit = path.hit.getType() == HitType::Triangle;
-
-        path.dir = bs.wo;
-        path.thp *= bs.weight;
-        path.pdf = bs.pdf;
-
-        path.clearEventFlags();
-
-        // Handle reflection events.
-        if (bs.isLobe(LobeType::Reflection))
-        {
-            // We classify specular events as diffuse if the roughness is above some threshold.
-            float roughness = mi.getProperties(sd).roughness;
-            bool isDiffuse = bs.isLobe(LobeType::DiffuseReflection) || roughness > kSpecularRoughnessThreshold;
-
-            if (isDiffuse)
-            {
-                path.incrementBounces(BounceType::Diffuse);
-            }
-            else
-            {
-                path.incrementBounces(BounceType::Specular);
-                path.setSpecular();
-            }
-        }
-
-        // Handle delta events.
-        if (bs.isLobe(LobeType::Delta))
-        {
-            path.setDelta();
-        }
-
-        // Handle transmission events.
-        if (bs.isLobe(LobeType::Transmission))
-        {
-            path.incrementBounces(BounceType::Transmission);
-            path.setTransmission();
-
-            {
-                // Compute ray origin for next ray segment.
-                path.origin = sd.computeRayOrigin(false);
-
-                // Update interior list and inside volume flag.
-                if (!sd.mtl.isThinSurface())
-                {
-                    uint nestedPriority = sd.mtl.getNestedPriority();
-                    path.interiorList.handleIntersection(sd.materialID, nestedPriority, sd.frontFacing);
-                    path.setInsideDielectricVolume(!path.interiorList.isEmpty());
-                }
-            }
-        }
-
-        // Save the normal used for NEE. This is needed for MIS.
-        path.normal = sd.getOrientedFaceNormal();
-
-        // Mark the path as valid only if it has a non-zero throughput.
-        bool valid = any(path.thp > 0.f);
-
-        return valid;
-    }
-
     void execute(const uint2 pixel)
     {
-        if (any(pixel >= gFirstSmooth.frameDim))
+        if (any(pixel >= frameDim))
             return;
+        const uint pixIdx = pixel.y * frameDim.x + pixel.x;
 
         // Compute primary ray.
-        Ray ray = gScene.camera.computeRayPinhole(pixel, gFirstSmooth.frameDim);
+        Ray ray = gScene.camera.computeRayPinhole(pixel, frameDim);
         
         // Trace rays.
-        SceneRayQuery<FirstSmooth::kUseAlphaTest> sceneRayQuery;
+        SceneRayQuery<kUseAlphaTest> sceneRayQuery;
         HitInfo hit;
         float3 color = float3(0.f);
 
@@ -142,17 +94,16 @@ struct FirstSmooth
         float3 dir = float3(0.f);
         float3 normal = float3(0.f);
         float3 albedo = float3(0.f);
-        float roughness = 0.f;
-        float3 thp = float3(0.f);
+        float roughness = 1.f;
 
         // Initialize path state.
         PathState path = {};
         generatePath(pixel, path);
 
-        for (int i = 0; i < FirstSmooth::kMaxRecursionDepth; i++)
+        for (int i = 0; i < kMaxRecursionDepth; i++)
         {
             float rayT = 0;
-            hit = sceneRayQuery.traceRay(ray, rayT, FirstSmooth::kRayFlags);
+            hit = sceneRayQuery.traceRay(ray, rayT, kRayFlags);
 
             // Miss: Write background color.
             if (!hit.isValid())
@@ -206,28 +157,33 @@ struct FirstSmooth
                 albedo = all(bsdfProperties.diffuseReflectionAlbedo < 0.01f) ? 
                     bsdfProperties.specularReflectionAlbedo : bsdfProperties.diffuseReflectionAlbedo;
 
-                thp = path.thp * albedo;
+                color = path.thp;
                 break;
             }
-            // uint lobeTypes = mi.getLobeTypes(sd);
-            // if ((lobeTypes & (uint)LobeType::Delta) != 0 && (lobeTypes & (uint)LobeType::NonDelta) == 0)
 
             // Sample next ray segment.
-            BSDFSample result;
+            BSDFSample result = {};
             bool valid = mi.sample(sd, path.sg, result);
-            if (valid) valid = generateScatterRay(result, sd, mi, path);
+            if (valid) valid = generateScatterRay(result, sd, mi, path, kSpecularRoughnessThreshold);
 
             // Break the loop if the BSDF sample is invalid.
-            if (!valid) break;
+            if (!valid)
+            {
+                path.terminate();
+                break;
+            }
 
             // Update ray.
             ray = path.getScatterRay();
         }
 
+        // Active mask
+        uint diffAct = (path.isActive() && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
+        uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
+
         // Write outputs
         gColor[pixel] = float4(color, 0.f);
         gVBuffer[pixel] = hit.pack();
-        gFSThp[pixel] = float4(thp, 0.f);
         gActive[pixel] = path.isActive();
 
         // Write G-Buffer
@@ -236,14 +192,20 @@ struct FirstSmooth
         gNormal[pixel] = float4(normal, 0.f);
         gAlbedo[pixel] = float4(albedo, 0.f);
         gRoughness[pixel] = roughness;
+
+        // Write active mask
+        diffActive[pixIdx] = diffAct;
+        diffIndex[pixIdx] = diffAct;
+        specActive[pixIdx] = specAct;
+        specIndex[pixIdx] = specAct;
     }
 };
 
-ParameterBlock<FirstSmooth> gFirstSmooth;
+ParameterBlock<FirstSmoothPass> gFirstSmoothPass;
 
 
 [numthreads(16, 16, 1)]
 void main(uint3 dispatchThreadId: SV_DispatchThreadID)
 {
-    gFirstSmooth.execute(dispatchThreadId.xy);
+    gFirstSmoothPass.execute(dispatchThreadId.xy);
 }

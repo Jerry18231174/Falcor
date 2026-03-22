@@ -30,6 +30,7 @@ __exported import Scene.Shading;
 import Scene.Material.ShadingUtils;
 import Rendering.Materials.TexLODHelpers;
 import Utils.Math.MathHelpers;
+import PathState;
 
 
 /** Compute derivatives at primary triangle hit.
@@ -132,4 +133,81 @@ ShadingData loadShadingData(const HitInfo hit, const float3 rayOrigin, const flo
     VertexData v = loadVertexData(hit, rayOrigin, rayDir, materialID);
     ShadingData sd = gScene.materials.prepareShadingData(v, materialID, -rayDir);
     return sd;
+}
+
+/** Generates a new scatter ray given a valid BSDF sample.
+    \param[in] bs BSDF sample (assumed to be valid).
+    \param[in] sd Shading data.
+    \param[in] mi Material instance at the shading point.
+    \param[in,out] path The path state.
+    \param[in] specularRoughnessThreshold Specular roughness threshold.
+    \return True if a ray was generated, false otherwise.
+*/
+bool generateScatterRay(
+    const BSDFSample bs,
+    const ShadingData sd,
+    const IMaterialInstance mi,
+    inout PathState path,
+    float specularRoughnessThreshold
+)
+{
+    const bool isTriangleHit = path.hit.getType() == HitType::Triangle;
+
+    path.dir = bs.wo;
+    path.thp *= bs.weight;
+    path.pdf = bs.pdf;
+
+    path.clearEventFlags();
+
+    // Handle reflection events.
+    if (bs.isLobe(LobeType::Reflection))
+    {
+        // We classify specular events as diffuse if the roughness is above some threshold.
+        float roughness = mi.getProperties(sd).roughness;
+        bool isDiffuse = bs.isLobe(LobeType::DiffuseReflection) || roughness > specularRoughnessThreshold;
+
+        if (isDiffuse)
+        {
+            path.incrementBounces(BounceType::Diffuse);
+        }
+        else
+        {
+            path.incrementBounces(BounceType::Specular);
+            path.setSpecular();
+        }
+    }
+
+    // Handle delta events.
+    if (bs.isLobe(LobeType::Delta))
+    {
+        path.setDelta();
+    }
+
+    // Handle transmission events.
+    if (bs.isLobe(LobeType::Transmission))
+    {
+        path.incrementBounces(BounceType::Transmission);
+        path.setTransmission();
+
+        {
+            // Compute ray origin for next ray segment.
+            path.origin = sd.computeRayOrigin(false);
+
+            // Update interior list and inside volume flag.
+            if (!sd.mtl.isThinSurface())
+            {
+                uint nestedPriority = sd.mtl.getNestedPriority();
+                path.interiorList.handleIntersection(sd.materialID, nestedPriority, sd.frontFacing);
+                path.setInsideDielectricVolume(!path.interiorList.isEmpty());
+            }
+        }
+    }
+
+    // Save the normal used for NEE. This is needed for MIS.
+    path.normal = sd.getOrientedFaceNormal();
+
+    // Mark the path as valid only if it has a non-zero throughput.
+    bool valid = any(path.thp > 0.f);
+
+    return valid;
 }

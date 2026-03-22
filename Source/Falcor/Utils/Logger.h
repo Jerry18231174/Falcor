@@ -47,8 +47,8 @@ public:
         Disabled, ///< Disable log messages.
         Fatal,    ///< Fatal messages.
         Error,    ///< Error messages.
-        Warning,  ///< Warning messages.
         Info,     ///< Informative messages.
+        Warning,  ///< Warning messages.
         Debug,    ///< Debugging messages.
         Count,    ///< Keep this last.
     };

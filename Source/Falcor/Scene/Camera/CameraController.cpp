@@ -260,7 +260,7 @@ namespace Falcor
                 {
                     float3 sideway = cross(viewDir, normalize(camUp));
 
-                    float2 mouseRotation = mIsLeftButtonDown ? mMouseDelta * mSpeedModifier : float2(0.f);
+                    float2 mouseRotation = mIsLeftButtonDown ? mMouseDelta * mSpeedModifier * elapsedTime * 1e3f : float2(0.f);
                     float2 gamepadRotation = anyGamepadRotation ? mGamepadRightStick * kGamepadRotationSpeed * elapsedTime : float2(0.f);
                     float2 rotation = mouseRotation + gamepadRotation;
 

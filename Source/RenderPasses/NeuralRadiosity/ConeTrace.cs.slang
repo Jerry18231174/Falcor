@@ -5,26 +5,40 @@ import LoadShadingData;
 
 #include "Utils/Math/MathConstants.slangh"
 
-// Input channels
-RWTexture2D<PackedHitInfo> gVBuffer;
-RWTexture2D<float4> gFSThp;
-RWTexture2D<uint> gActive;
-
-// Output channels
-RWTexture2D<float4> gColor;
-RWStructuredBuffer<float> gClusterMean;
-RWStructuredBuffer<float> gClusterStd;
-RWStructuredBuffer<uint> gClusterSize;
-
 // G-Buffer channels
-RWTexture2D<float4> gPos;
-RWTexture2D<float4> gDir;
-RWTexture2D<float4> gNormal;
-RWTexture2D<float4> gAlbedo;
-RWTexture2D<float> gRoughness;
+RWStructuredBuffer<float4> specPos;
+RWStructuredBuffer<float4> specDir;
+RWStructuredBuffer<float> specRoughness;
+RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
-#if !defined(USE_ALPHA_TEST) || !defined(ADJUST_SHADING_NORMALS) || !defined(USE_ENV_LIGHT) || !defined(RAY_FLAGS)
-#error "Not all defines are set!"
+// Cluster channels
+RWStructuredBuffer<float4> clusterPos;
+RWStructuredBuffer<float4> clusterDir;
+RWStructuredBuffer<float> clusterScale;
+RWStructuredBuffer<float> clusterWeight;
+
+#ifndef USE_ALPHA_TEST
+#define USE_ALPHA_TEST true
+#endif
+
+#ifndef ADJUST_SHADING_NORMALS
+#define ADJUST_SHADING_NORMALS true
+#endif
+
+#ifndef USE_ENV_LIGHT
+#define USE_ENV_LIGHT true
+#endif
+
+#ifndef RAY_FLAGS
+#define RAY_FLAGS true
+#endif
+
+#ifndef SPECULAR_ROUGHNESS_THRESHOLD
+#define SPECULAR_ROUGHNESS_THRESHOLD 0.5f
+#endif
+
+#ifndef NUM_KMEANS_ITERS
+#define NUM_KMEANS_ITERS 10
 #endif
 
 #ifndef NUM_SPEC_RAYS
@@ -40,13 +54,13 @@ RWTexture2D<float> gRoughness;
 #endif
 
 
-groupshared bool specPixel;
-groupshared uint2 pixel;
 groupshared ShadingData sd;
 groupshared IMaterialInstance mi;
 groupshared BSDFProperties bsdfProperties;
 
-groupshared float3 dbgDir;
+groupshared float3 pos;
+groupshared float3 dir;
+groupshared float tanLobe;
 
 // Wave reduction buffers
 groupshared float gsWaveMin[NUM_SPEC_RAYS / 32];
@@ -103,35 +117,43 @@ struct ConeTrace
     static const bool kAdjustShadingNormals = ADJUST_SHADING_NORMALS;
     static const bool kUseEnvLight = USE_ENV_LIGHT;
     static const uint kRayFlags = RAY_FLAGS;
-    static const float kEnvMapDepth = 100000000.0f; // Arbitrary big number
-    static const int kMaxRecursionDepth = 16;
-    static const float kSpecularRoughnessThreshold = 0.5f;
+    static const float kSpecularRoughnessThreshold = SPECULAR_ROUGHNESS_THRESHOLD;
     static const uint kRandomBase = 805459861u;
+    static const uint waveSize = WAVE_SIZE;  // WaveGetLaneCount();
 
+    static const uint numKMeansIters = NUM_KMEANS_ITERS;
     static const uint numSpecRays = NUM_SPEC_RAYS;
     static const uint numClusters = NUM_CLUSTERS;
 
-    uint2 frameDim = {};
-    uint frameCount = 0;
-    uint numKMeansIters = 0;
+    static const uint kLutSize = 32;
+    static const float gTanLobeLUT[kLutSize] = {
+        0.0,                    0.009716673754155636,   0.03886669501662254,    0.0874500647187233,
+        0.15546678006649017,    0.24291685223579407,    0.3498002588748932,     0.4761170446872711,
+        0.6218671202659607,     0.7870506048202515,     0.9716674089431763,     1.1757175922393799,
+        1.3992010354995728,     1.642117977142334,      1.9044681787490845,     2.186251640319824,
+        2.4874684810638428,     2.8081188201904297,     3.148202419281006,      3.5077192783355713,
+        3.886669635772705,      4.285053253173828,      4.7028703689575195,     5.140120506286621,
+        5.596804141998291,      6.072921276092529,      6.568471908569336,      7.083455562591553,
+        7.617872714996338,      8.171723365783691,      8.745006561279297,      9.337723731994629
+    };
+
+    uint batchSize = 0;
+    uint batchCount = 0;
+    uint diffSize = 0;
+    uint specSize = 0;
 
     void loadGroupData(const uint pixIdx, const uint threadIdx)
     {
         if (threadIdx == 0)
         {
-            pixel = uint2(pixIdx % gConeTrace.frameDim.x, pixIdx / gConeTrace.frameDim.x);
-            bool active = gActive[pixel] != 0;
-            float roughness = gRoughness[pixel];
-
-            // Trace postfix rays for specular interactions only.
-            specPixel = active && (roughness <= kSpecularRoughnessThreshold);
-
-            float3 pos = gPos[pixel].xyz;
-            float3 dir = gDir[pixel].xyz;
-            HitInfo hit = unpackHitInfo(gVBuffer[pixel]);
+            pos = specPos[pixIdx].xyz;
+            dir = specDir[pixIdx].xyz;
+            float roughness = specRoughness[pixIdx];
+            HitInfo hit = unpackHitInfo(specVBuffer[pixIdx]);
 
             // Load shading data.
             sd = loadShadingData(hit, pos, dir);
+            sd.posW = pos;
 
             // Disable diffuse lobes
             uint activeLobes = sd.mtl.getActiveLobes();
@@ -143,6 +165,13 @@ struct ConeTrace
             let hints = getMaterialInstanceHints(hit, true, kAdjustShadingNormals);
             mi = gScene.materials.getMaterialInstance(sd, lod, hints);
             bsdfProperties = mi.getProperties(sd);
+
+            // Calculate lobe info.
+            dir = reflect(dir, sd.frame.N);
+            float lutPos = roughness * kLutSize;
+            uint lutIdx = (uint) lutPos;
+            float frac = lutPos - lutIdx;
+            tanLobe = lerp(gTanLobeLUT[lutIdx], gTanLobeLUT[lutIdx + 1], frac);
         }
         
         GroupMemoryBarrierWithGroupSync();
@@ -150,9 +179,11 @@ struct ConeTrace
 
     bool traceRandomDepth(const uint pixIdx, const uint threadIdx, out float rayT)
     {
-        SampleGenerator sg = SampleGenerator(pixel, (frameCount * pixIdx + threadIdx) * kRandomBase);
+        const uint rayIdx = pixIdx * numSpecRays + threadIdx;
 
-        BSDFSample result;
+        SampleGenerator sg = SampleGenerator(uint2(rayIdx & 0xFFFu, rayIdx >> 12), batchCount);
+
+        BSDFSample result = {};
         bool valid = mi.sample(sd, sg, result);
         if (!valid) return false;
 
@@ -160,7 +191,7 @@ struct ConeTrace
         Ray ray;
         ray.origin = sd.posW;
         ray.dir = result.wo;
-        ray.tMin = 1e-4f;
+        ray.tMin = 0.f;
         ray.tMax = 1e30f;
 
         HitInfo nextHit = sceneRayQuery.traceRay(ray, rayT, ConeTrace::kRayFlags);
@@ -276,12 +307,11 @@ struct ConeTrace
         static_assert(numSpecRays <= 256, "Thread group size exceeds the square of warp size: 16^2");
 
         uint laneIdx = WaveGetLaneIndex();
-        uint waveSize = WAVE_SIZE;  // WaveGetLaneCount();
         uint waveIdx = threadIdx / waveSize;
         uint numWaves = (numSpecRays + waveSize - 1) / waveSize;
 
         // float to int
-        float scale = 1e5f;
+        static const float scale = 1e5f;
         int rayTInt = (int) (rayT * scale);
 
         // 1.1 Min-max reduction inside a wave.
@@ -351,12 +381,17 @@ struct ConeTrace
                 gsCentersInt[threadIdx] = gsNewCentersInt[threadIdx] / count;
             }
         }
+        if (threadIdx < numClusters)
+        {
+            gsVarsInt[threadIdx] = 0;
+        }
         GroupMemoryBarrierWithGroupSync();
 
         // 3. Compute variance.
         int bestK = gsClusterIdx[threadIdx];
         int diff = rayTInt - gsCentersInt[bestK];
-        InterlockedAdd(gsVarsInt[bestK], diff * diff);
+        int varsInt = (int) ((float) diff / scale * diff);
+        InterlockedAdd(gsVarsInt[bestK], varsInt);
 
         GroupMemoryBarrierWithGroupSync();
 
@@ -372,26 +407,25 @@ struct ConeTrace
         if (threadIdx < numClusters)
         {
             uint index = pixIdx * numClusters + threadIdx;
-            float count = max(gsCounts[threadIdx], 1.0f);
-            gClusterStd[index] = sqrt(gsVars[threadIdx] / count);
-            gClusterMean[index] = gsCenters[threadIdx];
-            gClusterSize[index] = gsCounts[threadIdx];
+            float mean = gsCenters[threadIdx];
+            float size = gsCounts[threadIdx];
+            float std = sqrt(gsVars[threadIdx] / max(size, 1.0f));
+            // Calculate cluster info
+            clusterPos[index] = float4(pos + mean * dir, 1.0f);
+            clusterDir[index] = float4(dir, 0.0f);
+            clusterScale[index] = (std + tanLobe * mean) / 2;
+            clusterWeight[index] = (float) size / (float) numSpecRays;
         }
         GroupMemoryBarrierWithGroupSync();
     }
 
     void execute(const uint pixIdx, const uint threadIdx)
     {
-        if (pixIdx >= (gConeTrace.frameDim.x * gConeTrace.frameDim.y))
+        if (pixIdx >= specSize)
             return;
-
-        pixel = uint2(pixIdx % gConeTrace.frameDim.x, pixIdx / gConeTrace.frameDim.x);
 
         // Load interaction.
         loadGroupData(pixIdx, threadIdx);
-
-        // Trace postfix rays for specular interactions only.
-        if (!specPixel) return;
 
         float rayT;
         bool valid = traceRandomDepth(pixIdx, threadIdx, rayT);
@@ -401,14 +435,6 @@ struct ConeTrace
 
         // Write output
         writeOutput(pixIdx, threadIdx, rayT, valid);
-
-        if (threadIdx == 0)
-        {
-            // bool empty = gClusterSize[pixIdx * 4] == 0;
-            // gFSThp[pixel] = float4(empty ? 0.0f : (gClusterMean[pixIdx * 4]) / 5.0f, empty ? 1.0f : 0.0f, 0.0f, 0.0f);
-            gColor[pixel] = float4((gClusterMean[pixIdx * 4]) / 1.0f);
-            // gColor[pixel] = float4(dbgDir, 0.0f);
-        }
     }
 }
 

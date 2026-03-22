@@ -840,7 +840,7 @@ int runMain(int argc, char** argv)
     args::ValueFlag<std::string> sceneFlag(parser, "path", "Scene file (for example, a .pyscene file) to open.", { 'S', "scene" });
     args::ValueFlag<std::string> shaderCacheFlag(parser, "shadercache", "Path to the GFX shader cache.", { "shadercache" });
     args::ValueFlag<std::string> logfileFlag(parser, "path", "File to write log into.", {'l', "logfile"});
-    args::ValueFlag<int32_t> verbosityFlag(parser, "verbosity", "Logging verbosity (0=disabled, 1=fatal errors, 2=errors, 3=warnings, 4=infos, 5=debugging)", { 'v', "verbosity" }, 4);
+    args::ValueFlag<int32_t> verbosityFlag(parser, "verbosity", "Logging verbosity (0=disabled, 1=fatal errors, 2=errors, 3=infos, 4=warnings, 5=debugging)", { 'v', "verbosity" }, 3);
     args::Flag silentFlag(parser, "", "Start without opening a window and handling user input (deprecated: use --headless).", {"silent"});
     args::Flag fullscreenFlag(parser, "", "Start in fullscreen mode instead of windowed.", {"fullscreen"});
     args::ValueFlag<uint32_t> widthFlag(parser, "pixels", "Initial window width.", {"width"});

@@ -10,11 +10,7 @@ def render_graph_PathTracer():
 
     g.addEdge("NeuralRadiosity.color", "ToneMapper.src")
 
-    g.markOutput("NeuralRadiosity.fsThp")
-    g.markOutput("NeuralRadiosity.normal")
-    g.markOutput("NeuralRadiosity.albedo")
-    g.markOutput("NeuralRadiosity.roughness")
-    # g.markOutput("NeuralRadiosity.active")
+    g.markOutput("NeuralRadiosity.color")
     g.markOutput("ToneMapper.dst")
 
     return g

@@ -116,6 +116,8 @@ if(FALCOR_LINUX)
     set(CMAKE_INSTALL_RPATH $ORIGIN)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
     set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0)
+    # Keep CUDA host code ABI-compatible with prebuilt dependencies, same as C++.
+    set(CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0)
 endif()
 
 

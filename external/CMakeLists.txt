@@ -530,3 +530,14 @@ endif()
 set(RTXDI_DIR ${PACKMAN_DIR}/rtxdi)
 add_library(rtxdi INTERFACE)
 target_include_directories(rtxdi INTERFACE ${RTXDI_DIR}/rtxdi-sdk/include)
+
+# tiny-cuda-nn
+set(TCNN_EXTERNAL_FMT fmt CACHE STRING "" FORCE)
+set(TCNN_HALF_PRECISION OFF CACHE BOOL "" FORCE)
+set(TCNN_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(TCNN_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TCNN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(tiny-cuda-nn)
+set_target_properties(tiny-cuda-nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(tiny-cuda-nn-resources PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -1,14 +1,20 @@
 add_plugin(NeuralRadiosity)
+set_property(TARGET NeuralRadiosity PROPERTY CUDA_ARCHITECTURES 86)
 
-target_sources(NeuralRadiosity PRIVATE
-    NeuralRadiosity.cpp
-    NeuralRadiosity.h
+file(GLOB_RECURSE NR_SOURCES
+    "*.cpp"
+    "*.h"
+    "*.cu"
+    "*.slang"
+)
 
-    FirstSmooth.cs.slang
-    ConeTrace.cs.slang
+target_sources(NeuralRadiosity PRIVATE ${NR_SOURCES})
 
-    LoadShadingData.slang
-    PathState.slang
+target_link_libraries(NeuralRadiosity PRIVATE
+    Falcor
+    tiny-cuda-nn
+    tiny-cuda-nn-resources
+    fmt
 )
 
 target_copy_shaders(NeuralRadiosity RenderPasses/NeuralRadiosity)
