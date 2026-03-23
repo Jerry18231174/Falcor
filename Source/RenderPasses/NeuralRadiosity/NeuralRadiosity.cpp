@@ -118,13 +118,13 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     prepareResources(pRenderContext, renderData);
 
     // Render the scene.
-    if (mRenderMode)
+    if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
     {
         render(pRenderContext, renderData);
     }
 
     // Train the model.
-    if (mTrainMode)
+    if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
         train(pRenderContext);
     }
@@ -135,9 +135,28 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
 
 void NeuralRadiosity::renderUI(Gui::Widgets& widget)
 {
-    bool changed = false;
-    changed |= widget.checkbox("Render Mode", mRenderMode);
-    changed |= widget.checkbox("Train Mode", mTrainMode);
+    if (widget.dropdown("Render Mode", mRenderMode))
+    {
+        mVarsChanged = true;
+        if (mRenderMode == RenderMode::Train)
+        {
+            if (mNumSpecRays != NUM_SPEC_RAYS_TRAIN || mNumKMeansIters != NUM_KMEANS_ITERS_TRAIN)
+            {
+                mNumSpecRays = NUM_SPEC_RAYS_TRAIN;
+                mNumKMeansIters = NUM_KMEANS_ITERS_TRAIN;
+                mpConeTrace = nullptr;
+            }
+        }
+        else if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
+        {
+            if (mNumSpecRays != NUM_SPEC_RAYS_RENDER || mNumKMeansIters != NUM_KMEANS_ITERS_RENDER)
+            {
+                mNumSpecRays = NUM_SPEC_RAYS_RENDER;
+                mNumKMeansIters = NUM_KMEANS_ITERS_RENDER;
+                mpConeTrace = nullptr;
+            }
+        }
+    }
 
     if (widget.button("Load train cameras"))
     {
@@ -145,7 +164,7 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
         if (openFileDialog(kCameraJsonFilters, path))
         {
             loadTrainCamerasFromFile(path);
-            changed = true;
+            mVarsChanged = true;
         }
     }
 
@@ -158,8 +177,6 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         widget.tooltip(mTrainCameraPath.string());
     }
-
-    mVarsChanged = changed;
 }
 
 void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -299,7 +316,7 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     var["clusterScale"] = mpRenderBatch->clusterScale;
     var["clusterWeight"] = mpRenderBatch->clusterWeight;
 
-    if (mTrainMode)
+    if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
         var["debug"] = mpTrainRHSBatch->specColor;
 
     mpResolvePass->execute(pRenderContext, uint3(mFrameDim, 1));
@@ -308,7 +325,7 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
 void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
     // Sample a random camera (offline training)
-    if (!mRenderMode && (mTrainCameras.size() > 0))
+    if (mRenderMode == RenderMode::Train && (mTrainCameras.size() > 0))
     {
         std::mt19937 rng(mFrameCount);
         std::uniform_int_distribution<uint32_t> dist(0, mTrainCameras.size() - 1);
@@ -444,12 +461,12 @@ void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_
     FALCOR_ASSERT(pRenderContext);
 
     // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
-    pRenderContext->waitForFalcor();
+    pRenderContext->waitForFalcor(mpNRModel->stream());
 
     mpNRModel->train(pRayBatch->diffPtrs, pRayBatch->specPtrs, pRayBatch->diffSize, pRayBatch->specSize);
     
     // Synchronize CUDA->Falcor so following passes see CUDA writes.
-    pRenderContext->waitForCuda();
+    pRenderContext->waitForCuda(mpNRModel->stream());
 }
 
 void NeuralRadiosity::updateFrameDim(const uint2 frameDim)
@@ -629,14 +646,22 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
     const auto startTime = std::chrono::steady_clock::now();
 
     ShaderVar var = mpRandomSmooth->getRootVar();
-    if (mRenderMode)
+
+    if (!mpRenderBatch)
+        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch");
+    if (!mpTrainLHSBatch)
+        mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters, "LHSBatch");
+    if (!mpTrainRHSBatch)
+        mpTrainRHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize * mNumRHS, mNumClusters, "RHSBatch");
+
+    if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
     {
-        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters);
+        mpRenderBatch->resize(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters);
     }
-    if (mTrainMode)
+    if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
-        mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters);
-        mpTrainRHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize * mNumRHS, mNumClusters);
+        mpTrainLHSBatch->resize(mpDevice, var, mBatchSize, mNumClusters);
+        mpTrainRHSBatch->resize(mpDevice, var, mBatchSize * mNumRHS, mNumClusters);
     }
 
     const auto endTime = std::chrono::steady_clock::now();

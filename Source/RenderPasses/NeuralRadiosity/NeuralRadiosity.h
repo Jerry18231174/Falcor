@@ -44,6 +44,7 @@ struct RayBatchBuffer
     uint32_t diffSize = 0;
     uint32_t specSize = 0;
     uint32_t numClusters = 0;
+    std::string name;
 
     /// G-buffer
     ref<Buffer> pos;
@@ -81,8 +82,28 @@ struct RayBatchBuffer
     ModelIOPtrs diffPtrs;
     ModelIOPtrs specPtrs;
 
-    RayBatchBuffer(ref<Device> pDevice, ShaderVar& var, uint32_t size, uint32_t numClusters)
-        : size(size), numClusters(numClusters)
+    RayBatchBuffer(ref<Device> pDevice, ShaderVar& var, uint32_t size, uint32_t numClusters, const std::string& name)
+        : size(size), numClusters(numClusters), name(name)
+    {
+        initBuffers(pDevice, var);
+    }
+
+    void resize(ref<Device> pDevice, ShaderVar& var, uint32_t newSize, uint32_t newNumClusters)
+    {
+        uint32_t oldSize = size;
+        uint32_t oldNumClusters = numClusters;
+
+        size = newSize;
+        numClusters = newNumClusters;
+
+        if (size > oldSize || (numClusters * size) > (oldNumClusters * oldSize))
+        {
+            // Recreate buffers if the new size exceeds the old size
+            initBuffers(pDevice, var);
+        }
+    }
+
+    void initBuffers(ref<Device> pDevice, ShaderVar& var)
     {
         // Create buffers
         {
@@ -269,6 +290,41 @@ struct RayBatchBuffer
             );
         }
 
+        // Set names
+        {
+            pos->setName(name + "_pos");
+            dir->setName(name + "_dir");
+            normal->setName(name + "_normal");
+            albedo->setName(name + "_albedo");
+            roughness->setName(name + "_roughness");
+            vbuffer->setName(name + "_vbuffer");
+            color->setName(name + "_color");
+
+            diffPos->setName(name + "_diffPos");
+            diffDir->setName(name + "_diffDir");
+            diffNormal->setName(name + "_diffNormal");
+            diffAlbedo->setName(name + "_diffAlbedo");
+            diffRoughness->setName(name + "_diffRoughness");
+            diffActive->setName(name + "_diffActive");
+            diffIndex->setName(name + "_diffIndex");
+            diffColor->setName(name + "_diffColor");
+
+            specPos->setName(name + "_specPos");
+            specDir->setName(name + "_specDir");
+            specNormal->setName(name + "_specNormal");
+            specAlbedo->setName(name + "_specAlbedo");
+            specRoughness->setName(name + "_specRoughness");
+            specVBuffer->setName(name + "_specVBuffer");
+            specActive->setName(name + "_specActive");
+            specIndex->setName(name + "_specIndex");
+            specColor->setName(name + "_specColor");
+
+            clusterPos->setName(name + "_clusterPos");
+            clusterDir->setName(name + "_clusterDir");
+            clusterScale->setName(name + "_clusterScale");
+            clusterWeight->setName(name + "_clusterWeight");
+        }
+
         diffPtrs = {
             (float*) diffPos->getCudaMemory()->getMappedData(),
             (float*) diffDir->getCudaMemory()->getMappedData(),
@@ -295,6 +351,25 @@ struct RayBatchBuffer
         };
     }
 };
+
+enum class RenderMode
+{
+    Idle,
+    Render,
+    Train,
+    OnlineTrain
+};
+
+FALCOR_ENUM_INFO(
+    RenderMode,
+    {
+        {RenderMode::Idle, "Idle"},
+        {RenderMode::Render, "Render"},
+        {RenderMode::Train, "Train"},
+        {RenderMode::OnlineTrain, "Online Train"}
+    }
+);
+FALCOR_ENUM_REGISTER(RenderMode);
 
 
 class NeuralRadiosity : public RenderPass
@@ -351,9 +426,13 @@ private:
     /// Shader variables changed flag
     bool mVarsChanged = false;
     /// Algorithm parameters
-    uint32_t mNumSpecRays = 32;
+    static const uint32_t NUM_SPEC_RAYS_TRAIN = 128;
+    static const uint32_t NUM_SPEC_RAYS_RENDER = 32;
+    static const uint32_t NUM_KMEANS_ITERS_TRAIN = 10;
+    static const uint32_t NUM_KMEANS_ITERS_RENDER = 3;
+    uint32_t mNumSpecRays = NUM_SPEC_RAYS_RENDER;
+    uint32_t mNumKMeansIters = NUM_KMEANS_ITERS_RENDER;
     uint32_t mNumClusters = 4;
-    uint32_t mNumKMeansIters = 10;
     /// Russian Roulette probability for random smooth.
     float mRSRRProb = 0.4f;
     /// Enable alpha test.
@@ -396,10 +475,7 @@ private:
     std::unique_ptr<NRModel> mpNRModel;
 
     // Train mode parameters
-    /// Render mode.
-    bool mRenderMode = true;
-    /// Training the model (Online training if both are true).
-    bool mTrainMode = false;
+    RenderMode mRenderMode = RenderMode::Render;
     /// LHS and RHS
     uint32_t mBatchSize = 1u << 16;
     uint32_t mNumRHS = 32u;

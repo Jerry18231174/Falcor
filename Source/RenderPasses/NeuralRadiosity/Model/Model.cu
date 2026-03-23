@@ -92,47 +92,60 @@ __global__ void copyOutputBackwardKernel(ModelIOPtrs ioPtrs, float* modelOutput,
 }
 
 // Host code
-void launchCopyPrimInput(ModelIOPtrs ioPtrs, float* modelInput, const uint32_t size) {
+void launchCopyPrimInput(ModelIOPtrs ioPtrs, float* modelInput, const uint32_t size, cudaStream_t stream) {
     dim3 block(256);
     dim3 grid((size + 255) / 256);
 
-    copyPrimInputKernel<<<grid, block>>>(ioPtrs, modelInput, size);
+    copyPrimInputKernel<<<grid, block, 0, stream>>>(ioPtrs, modelInput, size);
 }
 
-void launchCopyClsInput(ModelIOPtrs ioPtrs, float* modelInput, const uint32_t numClusters, const uint32_t size, const uint32_t nFeaturesPerLevel) {
+void launchCopyClsInput(
+    ModelIOPtrs ioPtrs,
+    float* modelInput,
+    const uint32_t numClusters,
+    const uint32_t size,
+    const uint32_t nFeaturesPerLevel,
+    cudaStream_t stream
+) {
     dim3 block(256);
     dim3 grid((size + 255) / 256);
 
     if (nFeaturesPerLevel == 4) {
-        copyClsInputKernel<4><<<grid, block>>>(ioPtrs, modelInput, numClusters, size);
+        copyClsInputKernel<4><<<grid, block, 0, stream>>>(ioPtrs, modelInput, numClusters, size);
     } else if (nFeaturesPerLevel == 8) {
-        copyClsInputKernel<8><<<grid, block>>>(ioPtrs, modelInput, numClusters, size);
+        copyClsInputKernel<8><<<grid, block, 0, stream>>>(ioPtrs, modelInput, numClusters, size);
     } else {
         assert(false && "Unsupported number of features per level");
     }
 }
 
-void launchCopyOutput(ModelIOPtrs ioPtrs, const float* modelOutput, const uint32_t size, const uint32_t outputDim) {
+void launchCopyOutput(ModelIOPtrs ioPtrs, const float* modelOutput, const uint32_t size, const uint32_t outputDim, cudaStream_t stream) {
     dim3 block(256);
     dim3 grid((size + 255) / 256);
 
     if (outputDim == 4) {
-        copyOutputKernel<4><<<grid, block>>>(ioPtrs, modelOutput, size);
+        copyOutputKernel<4><<<grid, block, 0, stream>>>(ioPtrs, modelOutput, size);
     } else if (outputDim == 16) {
-        copyOutputKernel<16><<<grid, block>>>(ioPtrs, modelOutput, size);
+        copyOutputKernel<16><<<grid, block, 0, stream>>>(ioPtrs, modelOutput, size);
     } else {
         assert(false && "Unsupported output dimension");
     }
 }
 
-void launchCopyOutputBackward(ModelIOPtrs ioPtrs, float* modelOutput, const uint32_t size, const uint32_t outputDim) {
+void launchCopyOutputBackward(
+    ModelIOPtrs ioPtrs,
+    float* modelOutput,
+    const uint32_t size,
+    const uint32_t outputDim,
+    cudaStream_t stream
+) {
     dim3 block(256);
     dim3 grid((size + 255) / 256);
 
     if (outputDim == 4) {
-        copyOutputBackwardKernel<4><<<grid, block>>>(ioPtrs, modelOutput, size);
+        copyOutputBackwardKernel<4><<<grid, block, 0, stream>>>(ioPtrs, modelOutput, size);
     } else if (outputDim == 16) {
-        copyOutputBackwardKernel<16><<<grid, block>>>(ioPtrs, modelOutput, size);
+        copyOutputBackwardKernel<16><<<grid, block, 0, stream>>>(ioPtrs, modelOutput, size);
     } else {
         assert(false && "Unsupported output dimension");
     }
@@ -167,18 +180,34 @@ NRModel::NRModel(const std::vector<float> bbox) {
 }
 
 NRModel::~NRModel() {
+    mpTrainer.reset();
+    mpNet.reset();
+    mpDiffPrimInput.reset();
+    mpSpecPrimInput.reset();
+    mpClsInput.reset();
+    mpOutput.reset();
+    
+    if (mStream) {
+        CUDA_CHECK_THROW(cudaStreamDestroy(mStream));
+    }
 }
 
 void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32_t diffSize, const uint32_t specSize) {
     const uint32_t diffBatchSize = padUp(diffSize, 256);
     const uint32_t specBatchSize = padUp(specSize, 256);
 
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
     // Copy primary G-Buffers
-    if (diffSize > 0) launchCopyPrimInput(diffPtrs, mpDiffPrimInput->data(), diffSize);
+    if (diffSize > 0) launchCopyPrimInput(diffPtrs, mpDiffPrimInput->data(), diffSize, mStream);
     if (specSize > 0) {
-        launchCopyPrimInput(specPtrs, mpSpecPrimInput->data(), specSize);
-        launchCopyClsInput(specPtrs, mpClsInput->data(), numClusters, specSize, nFeaturesPerLevel);
+        launchCopyPrimInput(specPtrs, mpSpecPrimInput->data(), specSize, mStream);
+        launchCopyClsInput(specPtrs, mpClsInput->data(), numClusters, specSize, nFeaturesPerLevel, mStream);
     }
+
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+    std::chrono::steady_clock::time_point copyInputEnd = std::chrono::steady_clock::now();
 
     // modelInput is dummy input, we don't use its gradient.
     tcnn::GPUMatrix<float> modelInput(mpDiffPrimInput->data(), mPrimInputDim, diffBatchSize + specBatchSize);
@@ -191,9 +220,21 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32
     mpNet->setIOPtrs(diffPrimInput, specPrimInput, clsInput);
     mpNet->inference(mStream, modelInput, modelOutput);
 
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+    std::chrono::steady_clock::time_point inferenceEnd = std::chrono::steady_clock::now();
+
     // Copy output to respective outputPtrs.
-    if (diffSize > 0) launchCopyOutput(diffPtrs, modelOutput.data(), diffSize, mOutputDim);
-    if (specSize > 0) launchCopyOutput(specPtrs, modelOutput.data() + diffBatchSize * mOutputDim, specSize, mOutputDim);
+    if (diffSize > 0) launchCopyOutput(diffPtrs, modelOutput.data(), diffSize, mOutputDim, mStream);
+    if (specSize > 0) launchCopyOutput(specPtrs, modelOutput.data() + diffBatchSize * mOutputDim, specSize, mOutputDim, mStream);
+
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+    std::chrono::steady_clock::time_point copyOutputEnd = std::chrono::steady_clock::now();
+
+    // Display in milliseconds
+    std::chrono::duration<double, std::milli> copyInputTime = copyInputEnd - start;
+    std::chrono::duration<double, std::milli> inferenceTime = inferenceEnd - copyInputEnd;
+    std::chrono::duration<double, std::milli> copyOutputTime = copyOutputEnd - inferenceEnd;
+    // std::cout << "Copy Input Time: " << copyInputTime.count() << " ms, Inference Time: " << inferenceTime.count() << " ms, Copy Output Time: " << copyOutputTime.count() << " ms" << std::endl;
 }
 
 void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32_t diffSize, const uint32_t specSize) {
@@ -201,10 +242,10 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32_t d
     const uint32_t specBatchSize = padUp(specSize, 256);
 
     // Copy primary G-Buffers
-    if (diffSize > 0) launchCopyPrimInput(diffPtrs, mpDiffPrimInput->data(), diffSize);
+    if (diffSize > 0) launchCopyPrimInput(diffPtrs, mpDiffPrimInput->data(), diffSize, mStream);
     if (specSize > 0) {
-        launchCopyPrimInput(specPtrs, mpSpecPrimInput->data(), specSize);
-        launchCopyClsInput(specPtrs, mpClsInput->data(), numClusters, specSize, nFeaturesPerLevel);
+        launchCopyPrimInput(specPtrs, mpSpecPrimInput->data(), specSize, mStream);
+        launchCopyClsInput(specPtrs, mpClsInput->data(), numClusters, specSize, nFeaturesPerLevel, mStream);
     }
 
     // modelInput is dummy input, we don't use its gradient.
@@ -216,10 +257,9 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32_t d
     tcnn::GPUMatrix<float> clsInput(mpClsInput->data(), mClsInputDim, numClusters * specBatchSize);
 
     // Copy (target) output to respective outputPtrs.
-    if (diffSize > 0) launchCopyOutputBackward(diffPtrs, modelOutput.data(), diffSize, mOutputDim);
-    if (specSize > 0) launchCopyOutputBackward(specPtrs, modelOutput.data() + diffBatchSize * mOutputDim, specSize, mOutputDim);
+    if (diffSize > 0) launchCopyOutputBackward(diffPtrs, modelOutput.data(), diffSize, mOutputDim, mStream);
+    if (specSize > 0) launchCopyOutputBackward(specPtrs, modelOutput.data() + diffBatchSize * mOutputDim, specSize, mOutputDim, mStream);
 
     mpNet->setIOPtrs(diffPrimInput, specPrimInput, clsInput);
     mpTrainer->training_step(mStream, modelInput, modelOutput);
 }
-

@@ -179,7 +179,7 @@ NeuralConeModel<T>::NeuralConeModel() {
         {"otype", "FullyFusedMLP"},
         {"activation", "ReLU"},
         {"output_activation", "SquarePlus"},
-        {"n_neurons", 64},
+        {"n_neurons", 128},
         {"n_hidden_layers", 3}
     };
 

@@ -73,7 +73,7 @@ struct ResolveRHS
             lhsColor += rhsColor[rhsIdx].toFloat4();
         }
         lhsColor /= numRHS;
-        lhsColor = select(isnan(lhsColor) & isfinite(lhsColor), float4(0.f), lhsColor);
+        lhsColor = select(isnan(lhsColor) | !isfinite(lhsColor), float4(0.f), lhsColor);
 
         if (specActive[idx] != 0)
         {

@@ -391,7 +391,7 @@ struct ConeTrace
         int bestK = gsClusterIdx[threadIdx];
         int diff = rayTInt - gsCentersInt[bestK];
         int varsInt = (int) ((float) diff / scale * diff);
-        InterlockedAdd(gsVarsInt[bestK], varsInt);
+        InterlockedAdd(gsVarsInt[bestK], valid ? varsInt : 0);
 
         GroupMemoryBarrierWithGroupSync();
 
