@@ -2,20 +2,14 @@ import Scene.Shading;
 import Scene.RaytracingInline;
 import PathState;
 import LoadShadingData;
+import NetworkParams;
 
 #include "Utils/Math/MathConstants.slangh"
 
-// G-Buffer channels
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float> specRoughness;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
-// Cluster channels
-RWStructuredBuffer<float4> clusterPos;
-RWStructuredBuffer<float4> clusterDir;
-RWStructuredBuffer<float> clusterScale;
-RWStructuredBuffer<float> clusterWeight;
+RWStructuredBuffer<PackedHitInfo> specVBuffer;
+RWStructuredBuffer<SpecNetInput> specInput;
+
 
 #ifndef USE_ALPHA_TEST
 #define USE_ALPHA_TEST true
@@ -142,13 +136,16 @@ struct ConeTrace
     uint diffSize = 0;
     uint specSize = 0;
 
+    float3 bboxMin;
+    float3 bboxMax;
+
     void loadGroupData(const uint pixIdx, const uint threadIdx)
     {
         if (threadIdx == 0)
         {
-            pos = specPos[pixIdx].xyz;
-            dir = specDir[pixIdx].xyz;
-            float roughness = specRoughness[pixIdx];
+            pos = specInput[pixIdx].getPos();
+            dir = specInput[pixIdx].getDir();
+            float roughness = specInput[pixIdx].getRoughness();
             HitInfo hit = unpackHitInfo(specVBuffer[pixIdx]);
 
             // Load shading data.
@@ -411,12 +408,23 @@ struct ConeTrace
             float size = gsCounts[threadIdx];
             float std = sqrt(gsVars[threadIdx] / max(size, 1.0f));
             // Calculate cluster info
-            clusterPos[index] = float4(pos + mean * dir, 1.0f);
-            clusterDir[index] = float4(dir, 0.0f);
-            clusterScale[index] = (std + tanLobe * mean) / 2;
-            clusterWeight[index] = (float) size / (float) numSpecRays;
+            float3 clsPos = pos + mean * dir;
+            float clsScale = (std + tanLobe * mean) / 2;
+            float clsWeight = size / (float) numSpecRays;
+            writeSpecInputClsBuffer(
+                specInput, pixIdx, threadIdx,
+                (clsPos - bboxMin) / (bboxMax - bboxMin),
+                clsScale, clsWeight
+            );
         }
-        GroupMemoryBarrierWithGroupSync();
+        if (threadIdx == 0)
+        {
+            // Normalize to [0, 1]
+            pos = (pos - bboxMin) / (bboxMax - bboxMin);
+            specInput[pixIdx].data[SpecNetInput::posOffset + 0] = pos.x;
+            specInput[pixIdx].data[SpecNetInput::posOffset + 1] = pos.y;
+            specInput[pixIdx].data[SpecNetInput::posOffset + 2] = pos.z;
+        }
     }
 
     void execute(const uint pixIdx, const uint threadIdx)

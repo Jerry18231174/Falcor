@@ -238,6 +238,8 @@ void NeuralRadiosity::train(RenderContext* pRenderContext)
 
 void NeuralRadiosity::firstSmoothPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    FALCOR_PROFILE(pRenderContext, "FirstSmoothPass");
+
     ShaderVar var = mpFirstSmoothPass->getRootVar();
     bindScreenData(var, renderData, "gFirstSmoothPass");
 
@@ -251,6 +253,8 @@ void NeuralRadiosity::firstSmoothPass(RenderContext* pRenderContext, const Rende
 
 void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    FALCOR_PROFILE(pRenderContext, "CompactPass");
+
     // Prefix sum from active mask to index
     mpPrefixSum->execute(
         pRenderContext,
@@ -270,25 +274,20 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     const auto name = "gCompactPass";
     bindScreenData(var, renderData, name);
 
+    const AABB& aabb = mpScene->getSceneBounds();
+    var[name]["bboxMin"] = aabb.minPoint;
+    var[name]["bboxMax"] = aabb.maxPoint;
+
     var[name]["diffSize"] = mpRenderBatch->diffSize;
     var[name]["specSize"] = mpRenderBatch->specSize;
 
     var["diffActive"] = mpRenderBatch->diffActive;
     var["diffIndex"] = mpRenderBatch->diffIndex;
+    var["diffInput"] = mpRenderBatch->diffInput;
+
     var["specActive"] = mpRenderBatch->specActive;
     var["specIndex"] = mpRenderBatch->specIndex;
-
-    var["diffPos"] = mpRenderBatch->diffPos;
-    var["diffDir"] = mpRenderBatch->diffDir;
-    var["diffNormal"] = mpRenderBatch->diffNormal;
-    var["diffAlbedo"] = mpRenderBatch->diffAlbedo;
-    var["diffRoughness"] = mpRenderBatch->diffRoughness;
-
-    var["specPos"] = mpRenderBatch->specPos;
-    var["specDir"] = mpRenderBatch->specDir;
-    var["specNormal"] = mpRenderBatch->specNormal;
-    var["specAlbedo"] = mpRenderBatch->specAlbedo;
-    var["specRoughness"] = mpRenderBatch->specRoughness;
+    var["specInput"] = mpRenderBatch->specInput;
     var["specVBuffer"] = mpRenderBatch->specVBuffer;
 
     mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
@@ -296,6 +295,8 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
 
 void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    FALCOR_PROFILE(pRenderContext, "ResolvePass");
+
     ShaderVar var = mpResolvePass->getRootVar();
     const auto name = "gResolvePass";
     bindScreenData(var, renderData, name);
@@ -305,16 +306,12 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
 
     var["diffActive"] = mpRenderBatch->diffActive;
     var["diffIndex"] = mpRenderBatch->diffIndex;
+    var["diffColor"] = mpRenderBatch->diffColor;
+
     var["specActive"] = mpRenderBatch->specActive;
     var["specIndex"] = mpRenderBatch->specIndex;
-
-    var["diffColor"] = mpRenderBatch->diffColor;
     var["specColor"] = mpRenderBatch->specColor;
-
-    var["clusterPos"] = mpRenderBatch->clusterPos;
-    var["clusterDir"] = mpRenderBatch->clusterDir;
-    var["clusterScale"] = mpRenderBatch->clusterScale;
-    var["clusterWeight"] = mpRenderBatch->clusterWeight;
+    var["specVBuffer"] = mpRenderBatch->specVBuffer;
 
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
         var["debug"] = mpTrainRHSBatch->specColor;
@@ -404,7 +401,12 @@ void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_pt
     );
 
     ShaderVar var = mpCompactBatch->getRootVar();
-    bindRayBatchData(var, pRayBatch, "gCompactBatch");
+    const auto name = "gCompactBatch";
+    bindRayBatchData(var, pRayBatch, name);
+
+    const AABB& aabb = mpScene->getSceneBounds();
+    var[name]["bboxMin"] = aabb.minPoint;
+    var[name]["bboxMax"] = aabb.maxPoint;
 
     mpCompactBatch->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
 }
@@ -429,29 +431,26 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
     var[name]["diffSize"] = pRayBatch->diffSize;
     var[name]["specSize"] = pRayBatch->specSize;
 
-    var["specPos"] = pRayBatch->specPos;
-    var["specDir"] = pRayBatch->specDir;
-    var["specRoughness"] = pRayBatch->specRoughness;
-    var["specVBuffer"] = pRayBatch->specVBuffer;
+    const AABB& aabb = mpScene->getSceneBounds();
+    var[name]["bboxMin"] = aabb.minPoint;
+    var[name]["bboxMax"] = aabb.maxPoint;
 
-    var["clusterPos"] = pRayBatch->clusterPos;
-    var["clusterDir"] = pRayBatch->clusterDir;
-    var["clusterScale"] = pRayBatch->clusterScale;
-    var["clusterWeight"] = pRayBatch->clusterWeight;
+    var["specVBuffer"] = pRayBatch->specVBuffer;
+    var["specInput"] = pRayBatch->specInput;
 
     mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
 }
 
 void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
-    FALCOR_PROFILE(pRenderContext, "modelInference");
     FALCOR_ASSERT(pRenderContext);
+    FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA");
 
     // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
     pRenderContext->waitForFalcor(mpNRModel->stream());
 
-    mpNRModel->inference(pRayBatch->diffPtrs, pRayBatch->specPtrs, pRayBatch->diffSize, pRayBatch->specSize);
-    
+    mpNRModel->inference(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+
     // Synchronize CUDA->Falcor so following passes see CUDA writes.
     pRenderContext->waitForCuda(mpNRModel->stream());
 }
@@ -463,7 +462,7 @@ void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_
     // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
     pRenderContext->waitForFalcor(mpNRModel->stream());
 
-    mpNRModel->train(pRayBatch->diffPtrs, pRayBatch->specPtrs, pRayBatch->diffSize, pRayBatch->specSize);
+    mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
     
     // Synchronize CUDA->Falcor so following passes see CUDA writes.
     pRenderContext->waitForCuda(mpNRModel->stream());
@@ -626,12 +625,7 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
 
     if (!mpNRModel)
     {
-        const AABB& aabb = mpScene->getSceneBounds();
-        const std::vector<float> bbox = {
-            aabb.minPoint.x, aabb.minPoint.y, aabb.minPoint.z,
-            aabb.maxPoint.x, aabb.maxPoint.y, aabb.maxPoint.z
-        };
-        mpNRModel = std::make_unique<NRModel>(bbox);
+        mpNRModel = std::make_unique<NRModel>();
     }
 
     const auto modelEndTime = std::chrono::steady_clock::now();
@@ -648,20 +642,20 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
     ShaderVar var = mpRandomSmooth->getRootVar();
 
     if (!mpRenderBatch)
-        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch");
+        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch", false);
     if (!mpTrainLHSBatch)
-        mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters, "LHSBatch");
+        mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters, "LHSBatch", true);
     if (!mpTrainRHSBatch)
-        mpTrainRHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize * mNumRHS, mNumClusters, "RHSBatch");
+        mpTrainRHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize * mNumRHS, mNumClusters, "RHSBatch", true);
 
     if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
     {
-        mpRenderBatch->resize(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters);
+        mpRenderBatch->resize(mFrameDim.x * mFrameDim.y, mNumClusters);
     }
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
-        mpTrainLHSBatch->resize(mpDevice, var, mBatchSize, mNumClusters);
-        mpTrainRHSBatch->resize(mpDevice, var, mBatchSize * mNumRHS, mNumClusters);
+        mpTrainLHSBatch->resize(mBatchSize, mNumClusters);
+        mpTrainRHSBatch->resize(mBatchSize * mNumRHS, mNumClusters);
     }
 
     const auto endTime = std::chrono::steady_clock::now();
@@ -699,31 +693,17 @@ void NeuralRadiosity::bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchB
     var["allColor"] = pRayBatch->color;
 
     // Bind diffuse buffers
-    var["diffPos"] = pRayBatch->diffPos;
-    var["diffDir"] = pRayBatch->diffDir;
-    var["diffNormal"] = pRayBatch->diffNormal;
-    var["diffAlbedo"] = pRayBatch->diffAlbedo;
-    var["diffRoughness"] = pRayBatch->diffRoughness;
     var["diffActive"] = pRayBatch->diffActive;
     var["diffIndex"] = pRayBatch->diffIndex;
+    var["diffInput"] = pRayBatch->diffInput;
     var["diffColor"] = pRayBatch->diffColor;
 
     // Bind specular buffers
-    var["specPos"] = pRayBatch->specPos;
-    var["specDir"] = pRayBatch->specDir;
-    var["specNormal"] = pRayBatch->specNormal;
-    var["specAlbedo"] = pRayBatch->specAlbedo;
-    var["specRoughness"] = pRayBatch->specRoughness;
-    var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specActive"] = pRayBatch->specActive;
     var["specIndex"] = pRayBatch->specIndex;
+    var["specInput"] = pRayBatch->specInput;
     var["specColor"] = pRayBatch->specColor;
-
-    // Bind cluster buffers
-    var["clusterPos"] = pRayBatch->clusterPos;
-    var["clusterDir"] = pRayBatch->clusterDir;
-    var["clusterScale"] = pRayBatch->clusterScale;
-    var["clusterWeight"] = pRayBatch->clusterWeight;
+    var["specVBuffer"] = pRayBatch->specVBuffer;
 }
 
 DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const

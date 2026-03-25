@@ -17,42 +17,43 @@
 
 
 namespace HashGridInterp {
-    void initializeConstants(
-        uint32_t nLevels,
-        uint32_t nFeaturesPerLevel,
-        uint32_t log2HashMapSize,
-        uint32_t baseResolution,
-        float perLevelScale,
-        float interpRatio
-    );
+    struct Config {
+        uint32_t nClusters = 4;
+        uint32_t nLevels = 8;
+        uint32_t nFeaturesPerLevel = 8;
+        uint32_t log2HashMapSize = 19;
+        uint32_t baseResolution = 32;
+        float perLevelScale = 2.0f;
+        float interpRatio = 0.5f;
+    };
+
+    void initializeConstants(const Config& config);
 
     void launchForward(
         cudaStream_t stream,
         const float* grids,
-        float* clsInput,
+        float* input,
         uint32_t count,
         uint32_t fullDim,
-        uint32_t nLevels,
-        uint32_t nFeaturesPerLevel,
-        uint32_t log2HashMapSize,
-        uint32_t baseResolution,
-        float perLevelScale,
-        float interpRatio
+        uint32_t encOffset,
+        uint32_t posOffset,
+        uint32_t scaleOffset,
+        uint32_t weightOffset,
+        const Config& config
     );
 
     void launchBackward(
         cudaStream_t stream,
         const float* grids,
-        const float* clsInput,
-        const float* dL_doutput,
+        const float* input,
+        const float* dL_dinput,
         float* dL_dgrids,
         uint32_t count,
         uint32_t fullDim,
-        uint32_t nLevels,
-        uint32_t nFeaturesPerLevel,
-        uint32_t log2HashMapSize,
-        uint32_t baseResolution,
-        float perLevelScale,
-        float interpRatio
+        uint32_t encOffset,
+        uint32_t posOffset,
+        uint32_t scaleOffset,
+        uint32_t weightOffset,
+        const Config& config
     );
 }

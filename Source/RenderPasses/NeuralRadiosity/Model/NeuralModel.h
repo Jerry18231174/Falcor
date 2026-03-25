@@ -4,24 +4,23 @@
 #include <vector>
 #include "Model.h"
 #include "HashGrid.h"
-#include "HashGridInterp.h"
 #include "tiny-cuda-nn/config.h"
 
 namespace tcnn {
 
 template <typename T>
-struct NeuralConeModelContext : public Context {
+struct NeuralModelContext : public Context {
     uint32_t batchSize = 0;
 
     std::unique_ptr<Context> netCtx;
 };
 
 template <typename T>
-class NeuralConeModel : public DifferentiableObject<T, T, T> {
+class NeuralModel : public DifferentiableObject<T, T, T> {
 
 public:
-    NeuralConeModel();
-    ~NeuralConeModel() = default;
+    NeuralModel();
+    ~NeuralModel() = default;
 
     void inference_mixed_precision_impl(
         cudaStream_t stream,
@@ -62,31 +61,21 @@ public:
 private:
     std::shared_ptr<Network<T, T>> mpNet;
 
-    T* mpPrimGrids;
-    T* mpPrimGridsInference;
-    T* mpPrimGridsGradient;
-    uint32_t mPrimGridSize = 0;
+    T* mpGrids;
+    T* mpGridsInference;
+    T* mpGridsGradient;
+    uint32_t mGridSize = 0;
 
-    T* mpClsGrids;
-    T* mpClsGridsInference;
-    T* mpClsGridsGradient;
-    uint32_t mClsGridSize = 0;
+    HashGrid::Config mGridConfig = {4, 8, 19, 32, 2.0f};
 
-    HashGrid::Config mPrimGridConfig = {4, 8, 19, 32, 2.0f};
-    HashGridInterp::Config mClsGridConfig = {4, 8, 8, 19, 4, 2.0f, 0.5f};
-
-    uint32_t primEncOffset = 0;
-    uint32_t clsEncOffset = primEncOffset + mPrimGridConfig.nLevels * mPrimGridConfig.nFeaturesPerLevel;
-    uint32_t posOffset = clsEncOffset + mClsGridConfig.nClusters * mClsGridConfig.nFeaturesPerLevel;
+    uint32_t encOffset = 0;
+    uint32_t posOffset = encOffset + mGridConfig.nLevels * mGridConfig.nFeaturesPerLevel;
     uint32_t dirOffset = posOffset + 3;
     uint32_t normalOffset = dirOffset + 3;
     uint32_t albedoOffset = normalOffset + 3;
     uint32_t roughnessOffset = albedoOffset + 3;
-    uint32_t clsPosOffset = roughnessOffset + 1;
-    uint32_t clsScaleOffset = clsPosOffset + mClsGridConfig.nClusters * 3;
-    uint32_t clsWeightOffset = clsScaleOffset + mClsGridConfig.nClusters;
-    uint32_t totalDim = clsWeightOffset + mClsGridConfig.nClusters;
-    
+    uint32_t totalDim = roughnessOffset + 1;
+
     uint32_t mInputDim = padUp(totalDim, 16);
     uint32_t mOutputDim = 16;
     uint32_t mMaxBatchSize = 1u << 21;

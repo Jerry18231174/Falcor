@@ -40,11 +40,14 @@ using namespace Falcor;
 
 struct RayBatchBuffer
 {
+    ref<Device> pDevice;
+    ShaderVar var;
     uint32_t size = 0;
     uint32_t diffSize = 0;
     uint32_t specSize = 0;
     uint32_t numClusters = 0;
     std::string name;
+    bool needAll = true;
 
     /// G-buffer
     ref<Buffer> pos;
@@ -55,40 +58,24 @@ struct RayBatchBuffer
     ref<Buffer> vbuffer;
     ref<Buffer> color;
     /// Diffuse buffer
-    ref<Buffer> diffPos;
-    ref<Buffer> diffDir;
-    ref<Buffer> diffNormal;
-    ref<Buffer> diffAlbedo;
-    ref<Buffer> diffRoughness;
     ref<Buffer> diffActive;         // Compaction Input
     ref<Buffer> diffIndex;          // Compaction Output
+    ref<Buffer> diffInput;          // Diffuse input for neural network
     ref<Buffer> diffColor;
     /// Specular buffer
-    ref<Buffer> specPos;
-    ref<Buffer> specDir;
-    ref<Buffer> specNormal;
-    ref<Buffer> specAlbedo;
-    ref<Buffer> specRoughness;
     ref<Buffer> specVBuffer;
     ref<Buffer> specActive;       // Compaction Input
     ref<Buffer> specIndex;        // Compaction Output
+    ref<Buffer> specInput;        // Specular input for neural network
     ref<Buffer> specColor;
-    /// Cluster position, direction, scale, and weight
-    ref<Buffer> clusterPos;
-    ref<Buffer> clusterDir;
-    ref<Buffer> clusterScale;
-    ref<Buffer> clusterWeight;
-    /// Corresponding pointers
-    ModelIOPtrs diffPtrs;
-    ModelIOPtrs specPtrs;
 
-    RayBatchBuffer(ref<Device> pDevice, ShaderVar& var, uint32_t size, uint32_t numClusters, const std::string& name)
-        : size(size), numClusters(numClusters), name(name)
+    RayBatchBuffer(ref<Device> pDevice, ShaderVar& var, uint32_t size, uint32_t numClusters, const std::string& name, bool needAll = true)
+        : pDevice(pDevice), var(var), size(size), numClusters(numClusters), name(name), needAll(needAll)
     {
-        initBuffers(pDevice, var);
+        initBuffers();
     }
 
-    void resize(ref<Device> pDevice, ShaderVar& var, uint32_t newSize, uint32_t newNumClusters)
+    void resize(uint32_t newSize, uint32_t newNumClusters)
     {
         uint32_t oldSize = size;
         uint32_t oldNumClusters = numClusters;
@@ -99,13 +86,14 @@ struct RayBatchBuffer
         if (size > oldSize || (numClusters * size) > (oldNumClusters * oldSize))
         {
             // Recreate buffers if the new size exceeds the old size
-            initBuffers(pDevice, var);
+            initBuffers();
         }
     }
 
-    void initBuffers(ref<Device> pDevice, ShaderVar& var)
+    void initBuffers()
     {
         // Create buffers
+        if (needAll)
         {
             pos = pDevice->createStructuredBuffer(
                 var["allPos"], size,
@@ -153,36 +141,6 @@ struct RayBatchBuffer
 
         // Create diffuse pixel buffers
         {
-            diffPos = pDevice->createStructuredBuffer(
-                var["diffPos"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffDir = pDevice->createStructuredBuffer(
-                var["diffDir"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffNormal = pDevice->createStructuredBuffer(
-                var["diffNormal"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffAlbedo = pDevice->createStructuredBuffer(
-                var["diffAlbedo"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffRoughness = pDevice->createStructuredBuffer(
-                var["diffRoughness"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
             diffActive = pDevice->createStructuredBuffer(
                 var["diffActive"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
@@ -191,6 +149,12 @@ struct RayBatchBuffer
             );
             diffIndex = pDevice->createStructuredBuffer(
                 var["diffIndex"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
+            diffInput = pDevice->createStructuredBuffer(
+                var["diffInput"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
                 MemoryType::DeviceLocal,
                 nullptr, false
@@ -205,36 +169,6 @@ struct RayBatchBuffer
 
         // Create specular pixel buffers
         {
-            specPos = pDevice->createStructuredBuffer(
-                var["specPos"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specDir = pDevice->createStructuredBuffer(
-                var["specDir"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specNormal = pDevice->createStructuredBuffer(
-                var["specNormal"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specAlbedo = pDevice->createStructuredBuffer(
-                var["specAlbedo"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specRoughness = pDevice->createStructuredBuffer(
-                var["specRoughness"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
             specVBuffer = pDevice->createStructuredBuffer(
                 var["specVBuffer"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
@@ -253,6 +187,12 @@ struct RayBatchBuffer
                 MemoryType::DeviceLocal,
                 nullptr, false
             );
+            specInput = pDevice->createStructuredBuffer(
+                var["specInput"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
             specColor = pDevice->createStructuredBuffer(
                 var["specColor"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
@@ -260,94 +200,23 @@ struct RayBatchBuffer
                 nullptr, false
             );
         }
+    }
 
-        // Create cluster buffers
-        const uint32_t totalClusters = numClusters * size;
-        {
-            clusterPos = pDevice->createStructuredBuffer(
-                var["clusterPos"], totalClusters,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            clusterDir = pDevice->createStructuredBuffer(
-                var["clusterDir"], totalClusters,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            clusterScale = pDevice->createStructuredBuffer(
-                var["clusterScale"], totalClusters,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            clusterWeight = pDevice->createStructuredBuffer(
-                var["clusterWeight"], totalClusters,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-        }
-
-        // Set names
-        {
-            pos->setName(name + "_pos");
-            dir->setName(name + "_dir");
-            normal->setName(name + "_normal");
-            albedo->setName(name + "_albedo");
-            roughness->setName(name + "_roughness");
-            vbuffer->setName(name + "_vbuffer");
-            color->setName(name + "_color");
-
-            diffPos->setName(name + "_diffPos");
-            diffDir->setName(name + "_diffDir");
-            diffNormal->setName(name + "_diffNormal");
-            diffAlbedo->setName(name + "_diffAlbedo");
-            diffRoughness->setName(name + "_diffRoughness");
-            diffActive->setName(name + "_diffActive");
-            diffIndex->setName(name + "_diffIndex");
-            diffColor->setName(name + "_diffColor");
-
-            specPos->setName(name + "_specPos");
-            specDir->setName(name + "_specDir");
-            specNormal->setName(name + "_specNormal");
-            specAlbedo->setName(name + "_specAlbedo");
-            specRoughness->setName(name + "_specRoughness");
-            specVBuffer->setName(name + "_specVBuffer");
-            specActive->setName(name + "_specActive");
-            specIndex->setName(name + "_specIndex");
-            specColor->setName(name + "_specColor");
-
-            clusterPos->setName(name + "_clusterPos");
-            clusterDir->setName(name + "_clusterDir");
-            clusterScale->setName(name + "_clusterScale");
-            clusterWeight->setName(name + "_clusterWeight");
-        }
-
-        diffPtrs = {
-            (float*) diffPos->getCudaMemory()->getMappedData(),
-            (float*) diffDir->getCudaMemory()->getMappedData(),
-            (float*) diffNormal->getCudaMemory()->getMappedData(),
-            (float*) diffAlbedo->getCudaMemory()->getMappedData(),
-            (float*) diffRoughness->getCudaMemory()->getMappedData(),
-            nullptr, nullptr, nullptr, nullptr,
-            (float*) diffColor->getCudaMemory()->getMappedData()
+    ModelIOPtrs getDiffPtrs()
+    {
+        return {
+            (float*) diffInput->getCudaMemory()->getMappedData(),
+            (float*) diffColor->getCudaMemory()->getMappedData(),
+            diffSize
         };
-        
-        specPtrs = {
-            (float*) specPos->getCudaMemory()->getMappedData(),
-            (float*) specDir->getCudaMemory()->getMappedData(),
-            (float*) specNormal->getCudaMemory()->getMappedData(),
-            (float*) specAlbedo->getCudaMemory()->getMappedData(),
-            (float*) specRoughness->getCudaMemory()->getMappedData(),
+    }
 
-            (float*) clusterPos->getCudaMemory()->getMappedData(),
-            (float*) clusterDir->getCudaMemory()->getMappedData(),
-            (float*) clusterScale->getCudaMemory()->getMappedData(),
-            (float*) clusterWeight->getCudaMemory()->getMappedData(),
-
-            (float*) specColor->getCudaMemory()->getMappedData()
+    ModelIOPtrs getSpecPtrs()
+    {
+        return {
+            (float*) specInput->getCudaMemory()->getMappedData(),
+            (float*) specColor->getCudaMemory()->getMappedData(),
+            specSize
         };
     }
 };

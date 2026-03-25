@@ -1,4 +1,5 @@
 import Scene.Shading;
+import NetworkParams;
 
 // Output channels
 RWTexture2D<PackedHitInfo> gVBuffer;
@@ -13,23 +14,15 @@ RWTexture2D<float4> gAlbedo;
 RWTexture2D<float> gRoughness;
 
 // First smooth buffers
-RWStructuredBuffer<float4> diffPos;
-RWStructuredBuffer<float4> diffDir;
-RWStructuredBuffer<float4> diffNormal;
-RWStructuredBuffer<float4> diffAlbedo;
-RWStructuredBuffer<float> diffRoughness;
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
+RWStructuredBuffer<DiffNetInput> diffInput;
 
 // Specular buffers
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float4> specNormal;
-RWStructuredBuffer<float4> specAlbedo;
-RWStructuredBuffer<float> specRoughness;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
+RWStructuredBuffer<SpecNetInput> specInput;
+RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
 
 struct CompactPass
@@ -39,6 +32,9 @@ struct CompactPass
     uint diffSize = 0;
     uint specSize = 0;
 
+    float3 bboxMin;
+    float3 bboxMax;
+
     void execute(const uint2 pixel)
     {
         if (any(pixel >= frameDim)) return;
@@ -47,22 +43,28 @@ struct CompactPass
         if (diffActive[pixIdx] != 0)
         {
             const uint diffIdx = diffIndex[pixIdx];
-            diffPos[diffIdx] = gPos[pixel];
-            diffDir[diffIdx] = gDir[pixel];
-            diffNormal[diffIdx] = gNormal[pixel];
-            diffAlbedo[diffIdx] = gAlbedo[pixel];
-            diffRoughness[diffIdx] = gRoughness[pixel];
+            writeDiffInputGBuffer(
+                diffInput, diffIdx,
+                (gPos[pixel].xyz - bboxMin) / (bboxMax - bboxMin),
+                gDir[pixel].xyz,
+                gNormal[pixel].xyz,
+                gAlbedo[pixel].xyz,
+                gRoughness[pixel]
+            );
         }
 
         if (specActive[pixIdx] != 0)
         {
             const uint specIdx = specIndex[pixIdx];
-            specPos[specIdx] = gPos[pixel];
-            specDir[specIdx] = gDir[pixel];
-            specNormal[specIdx] = gNormal[pixel];
-            specAlbedo[specIdx] = gAlbedo[pixel];
-            specRoughness[specIdx] = gRoughness[pixel];
             specVBuffer[specIdx] = gVBuffer[pixel];
+            writeSpecInputGBuffer(
+                specInput, specIdx,
+                gPos[pixel].xyz,
+                gDir[pixel].xyz,
+                gNormal[pixel].xyz,
+                gAlbedo[pixel].xyz,
+                gRoughness[pixel]
+            );
         }
     }
 }

@@ -14,31 +14,15 @@ RWTexture2D<float4> gAlbedo;
 RWTexture2D<float> gRoughness;
 
 // First smooth buffers
-RWStructuredBuffer<float4> diffPos;
-RWStructuredBuffer<float4> diffDir;
-RWStructuredBuffer<float4> diffNormal;
-RWStructuredBuffer<float4> diffAlbedo;
-RWStructuredBuffer<float> diffRoughness;
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
 RWStructuredBuffer<NetworkOutput> diffColor;
 
 // Specular buffers
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float4> specNormal;
-RWStructuredBuffer<float4> specAlbedo;
-RWStructuredBuffer<float> specRoughness;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<NetworkOutput> specColor;
-
-// Clusters
-RWStructuredBuffer<float4> clusterPos;
-RWStructuredBuffer<float4> clusterDir;
-RWStructuredBuffer<float> clusterScale;
-RWStructuredBuffer<float> clusterWeight;
+RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
 // debug
 RWStructuredBuffer<NetworkOutput> debug;

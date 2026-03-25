@@ -13,29 +13,16 @@ RWStructuredBuffer<float> allRoughness;
 RWStructuredBuffer<PackedHitInfo> allVBuffer;
 RWStructuredBuffer<NetworkOutput> allColor;
 
-RWStructuredBuffer<float4> diffPos;
-RWStructuredBuffer<float4> diffDir;
-RWStructuredBuffer<float4> diffNormal;
-RWStructuredBuffer<float4> diffAlbedo;
-RWStructuredBuffer<float> diffRoughness;
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
+RWStructuredBuffer<DiffNetInput> diffInput;
 RWStructuredBuffer<NetworkOutput> diffColor;
 
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float4> specNormal;
-RWStructuredBuffer<float4> specAlbedo;
-RWStructuredBuffer<float> specRoughness;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
+RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
-
-RWStructuredBuffer<float4> clusterPos;
-RWStructuredBuffer<float4> clusterDir;
-RWStructuredBuffer<float> clusterScale;
-RWStructuredBuffer<float> clusterWeight;
+RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
 
 #ifndef RAY_FLAGS

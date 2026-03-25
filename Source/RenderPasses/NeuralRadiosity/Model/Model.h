@@ -20,52 +20,48 @@ namespace tcnn
     template <typename T, typename PARAMS_T, typename COMPUTE_T>
     class Trainer;
 
-    // Custom neural cone model
+    // Custom models
+    template<typename T>
+    class NeuralModel;
+
     template<typename T>
     class NeuralConeModel;
 }
 
 struct ModelIOPtrs
 {
-    const float* posPtr;
-    const float* dirPtr;
-    const float* normalPtr;
-    const float* albedoPtr;
-    const float* roughnessPtr;
-
-    const float* clsPosPtr;
-    const float* clsDirPtr;
-    const float* clsScalePtr;
-    const float* clsWeightPtr;
-
+    float* inputPtr;
     float* outputPtr;
+
+    uint32_t size;
 };
+
+inline constexpr uint32_t padUp(uint32_t x, uint32_t align) { return (x + align - 1) & ~(align - 1); }
 
 
 class NRModel
 {
 public:
-    NRModel(const std::vector<float> bbox);
+    NRModel();
     ~NRModel();
 
     void loadState();
     void saveState();
 
-    void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32_t diffSize, const uint32_t specSize);
-    void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs, const uint32_t diffSize, const uint32_t specSize);
+    void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
+    void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
 
     cudaStream_t stream() const { return mStream; }
 
 private:
-    std::shared_ptr<tcnn::NeuralConeModel<float>> mpNet;
-
-    std::shared_ptr<tcnn::GPUMemory<float>> mpDiffPrimInput;
-    std::shared_ptr<tcnn::GPUMemory<float>> mpSpecPrimInput;
-    std::shared_ptr<tcnn::GPUMemory<float>> mpClsInput;
-    std::shared_ptr<tcnn::GPUMemory<float>> mpOutput;
-
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpTrainer;
+    std::shared_ptr<tcnn::NeuralModel<float>> mpDiffNet;
+    std::shared_ptr<tcnn::NeuralConeModel<float>> mpSpecNet;
+    std::unique_ptr<tcnn::Trainer<float, float, float>> mpDiffTrainer;
+    std::unique_ptr<tcnn::Trainer<float, float, float>> mpSpecTrainer;
     cudaStream_t mStream;
+
+    std::shared_ptr<tcnn::GPUMemory<float>> mpdLdDiffInput;
+    std::shared_ptr<tcnn::GPUMemory<float>> mpdLdSpecInput;
 
     uint32_t pixelCount = 1u << 21;
     uint32_t numClusters = 4;
@@ -77,7 +73,7 @@ private:
     uint32_t baseResolution = 32;
     float perLevelScale = 2.0f;
 
-    uint32_t mPrimInputDim = 3 + 3 * 4 + 1;
-    uint32_t mClsInputDim = nFeaturesPerLevel + 3 * 2 + 1 + 1;
+    uint32_t mDiffInputDim = padUp(nFeaturesPerLevel * nLevels + 3 * 4 + 1, 16);
+    uint32_t mSpecInputDim = padUp(nFeaturesPerLevel * (nLevels + numClusters) + 3 * 4 + 1 + numClusters * (3 + 1 + 1), 16);
     uint32_t mOutputDim = 16;
 };

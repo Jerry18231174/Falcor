@@ -10,29 +10,16 @@ RWStructuredBuffer<float> allRoughness;
 RWStructuredBuffer<PackedHitInfo> allVBuffer;
 RWStructuredBuffer<NetworkOutput> allColor;
 
-RWStructuredBuffer<float4> diffPos;
-RWStructuredBuffer<float4> diffDir;
-RWStructuredBuffer<float4> diffNormal;
-RWStructuredBuffer<float4> diffAlbedo;
-RWStructuredBuffer<float> diffRoughness;
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
+RWStructuredBuffer<DiffNetInput> diffInput;
 RWStructuredBuffer<NetworkOutput> diffColor;
 
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float4> specNormal;
-RWStructuredBuffer<float4> specAlbedo;
-RWStructuredBuffer<float> specRoughness;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
+RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
-
-RWStructuredBuffer<float4> clusterPos;
-RWStructuredBuffer<float4> clusterDir;
-RWStructuredBuffer<float> clusterScale;
-RWStructuredBuffer<float> clusterWeight;
+RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
 
 struct CompactBatch
@@ -42,6 +29,9 @@ struct CompactBatch
     uint diffSize = 0;
     uint specSize = 0;
 
+    float3 bboxMin;
+    float3 bboxMax;
+
     void execute(const uint idx)
     {
         if (any(idx >= batchSize)) return;
@@ -49,22 +39,28 @@ struct CompactBatch
         if (diffActive[idx] != 0)
         {
             const uint diffIdx = diffIndex[idx];
-            diffPos[diffIdx] = allPos[idx];
-            diffDir[diffIdx] = allDir[idx];
-            diffNormal[diffIdx] = allNormal[idx];
-            diffAlbedo[diffIdx] = allAlbedo[idx];
-            diffRoughness[diffIdx] = allRoughness[idx];
+            writeDiffInputGBuffer(
+                diffInput, diffIdx,
+                (allPos[idx].xyz - bboxMin) / (bboxMax - bboxMin),
+                allDir[idx].xyz,
+                allNormal[idx].xyz,
+                allAlbedo[idx].xyz,
+                allRoughness[idx]
+            );
         }
 
         if (specActive[idx] != 0)
         {
             const uint specIdx = specIndex[idx];
-            specPos[specIdx] = allPos[idx];
-            specDir[specIdx] = allDir[idx];
-            specNormal[specIdx] = allNormal[idx];
-            specAlbedo[specIdx] = allAlbedo[idx];
-            specRoughness[specIdx] = allRoughness[idx];
             specVBuffer[specIdx] = allVBuffer[idx];
+            writeSpecInputGBuffer(
+                specInput, specIdx,
+                allPos[idx].xyz,
+                allDir[idx].xyz,
+                allNormal[idx].xyz,
+                allAlbedo[idx].xyz,
+                allRoughness[idx]
+            );
         }
     }
 }

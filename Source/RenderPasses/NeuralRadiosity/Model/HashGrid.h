@@ -24,29 +24,37 @@
 
 
 namespace HashGrid {
+    struct Config {
+        uint32_t nLevels = 4;
+        uint32_t nFeaturesPerLevel = 8;
+        uint32_t log2HashMapSize = 19;
+        uint32_t baseResolution = 32;
+        float perLevelScale = 2.0f;
+    };
+
+    void initializeConstants(const Config& config);
+
     void launchForward(
-        const float* pos,
+        cudaStream_t stream,
         const float* grids,
-        float* output,
+        float* input,
         uint32_t count,
-        uint32_t nLevels,
-        uint32_t nFeaturesPerLevel,
-        uint32_t log2HashMapSize,
-        uint32_t baseResolution,
-        float perLevelScale
+        uint32_t fullDim,
+        uint32_t encOffset,
+        uint32_t posOffset,
+        const Config& config
     );
 
     void launchBackward(
-        const float* pos,
+        cudaStream_t stream,
         const float* grids,
-        const float* output,
-        const float* dL_doutput,
+        const float* input,
+        const float* dL_dinput,
         float* dL_dgrids,
         uint32_t count,
-        uint32_t nLevels,
-        uint32_t nFeaturesPerLevel,
-        uint32_t log2HashMapSize,
-        uint32_t baseResolution,
-        float perLevelScale
+        uint32_t fullDim,
+        uint32_t encOffset,
+        uint32_t posOffset,
+        const Config& config
     );
 }
