@@ -45,8 +45,8 @@ public:
     NRModel();
     ~NRModel();
 
-    void loadState();
-    void saveState();
+    void loadState(const std::string& path);
+    void saveState(const std::string& path);
 
     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
@@ -67,13 +67,20 @@ private:
     uint32_t numClusters = 4;
 
     // Hyper parameters
-    uint32_t nLevels = 4;
-    uint32_t nFeaturesPerLevel = 8;
+    uint32_t nLevels = 6;
+    uint32_t nFeaturesPerLevel = 4;
     uint32_t log2HashMapSize = 19;
     uint32_t baseResolution = 32;
     float perLevelScale = 2.0f;
 
+    uint32_t nInterpLevels = 8;
+    uint32_t nInterpFeaturesPerLevel = 8;
+    uint32_t log2InterpHashMapSize = 19;
+    uint32_t baseInterpResolution = 4;
+    float perLevelInterpScale = 2.0f;
+    float interpRatio = 0.5f;
+
     uint32_t mDiffInputDim = padUp(nFeaturesPerLevel * nLevels + 3 * 4 + 1, 16);
-    uint32_t mSpecInputDim = padUp(nFeaturesPerLevel * (nLevels + numClusters) + 3 * 4 + 1 + numClusters * (3 + 1 + 1), 16);
+    uint32_t mSpecInputDim = padUp(nFeaturesPerLevel * nLevels + nInterpFeaturesPerLevel * numClusters + 3 * 4 + 1 + numClusters * (3 + 1 + 1), 16);
     uint32_t mOutputDim = 16;
 };

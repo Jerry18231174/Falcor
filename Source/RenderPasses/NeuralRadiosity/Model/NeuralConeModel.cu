@@ -30,7 +30,23 @@ __global__ void clampGradients(
 } // namespace
 
 template<typename T>
-NeuralConeModel<T>::NeuralConeModel() {
+NeuralConeModel<T>::NeuralConeModel(HashGrid::Config primGridConfig, HashGridInterp::Config clsGridConfig) {
+    mPrimGridConfig = primGridConfig;
+    mClsGridConfig = clsGridConfig;
+
+    primEncOffset = 0;
+    clsEncOffset = primEncOffset + mPrimGridConfig.nLevels * mPrimGridConfig.nFeaturesPerLevel;
+    posOffset = clsEncOffset + mClsGridConfig.nClusters * mClsGridConfig.nFeaturesPerLevel;
+    dirOffset = posOffset + 3;
+    normalOffset = dirOffset + 3;
+    albedoOffset = normalOffset + 3;
+    roughnessOffset = albedoOffset + 3;
+    clsPosOffset = roughnessOffset + 1;
+    clsScaleOffset = clsPosOffset + mClsGridConfig.nClusters * 3;
+    clsWeightOffset = clsScaleOffset + mClsGridConfig.nClusters;
+    totalDim = clsWeightOffset + mClsGridConfig.nClusters;
+    mInputDim = padUp(totalDim, 16);
+
     CHECK_THROW(mMaxBatchSize % 256 == 0);
 
     const json networkConfig = {
@@ -39,8 +55,8 @@ NeuralConeModel<T>::NeuralConeModel() {
         {"output_activation", "SquarePlus"},
         {"n_input_dims", mInputDim},
         {"n_output_dims", mOutputDim},
-        {"n_neurons", 128},
-        {"n_hidden_layers", 3}
+        {"n_neurons", 64},
+        {"n_hidden_layers", 4}
     };
     mpNet = std::shared_ptr<Network<float, float>>(create_network<float>(networkConfig));
 

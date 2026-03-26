@@ -2,6 +2,7 @@
 
 #include "Utils/Math/VectorJson.h"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -53,6 +54,10 @@ namespace
 
     const FileDialogFilterVec kCameraJsonFilters = {
         {"json", "JSON Files"},
+    };
+
+    const FileDialogFilterVec kModelStateFilters = {
+        {"ckpt", "Binary Files"},
     };
 
     float3 parseFloat3(const nlohmann::json& value, std::string_view key)
@@ -111,11 +116,16 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
         return;
     }
 
+    // Prepare lighting data.
+    prepareLighting(pRenderContext);
+
     // Update shader program specialization.
     updatePrograms(pRenderContext, renderData);
 
     // Prepare resources.
     prepareResources(pRenderContext, renderData);
+
+    mVarsChanged = false;
 
     // Render the scene.
     if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
@@ -130,31 +140,63 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     }
 
     mFrameCount++;
-    mVarsChanged = false;
 }
 
 void NeuralRadiosity::renderUI(Gui::Widgets& widget)
 {
+    widget.text(fmt::format("Frame count: {}", mFrameCount));
     if (widget.dropdown("Render Mode", mRenderMode))
     {
         mVarsChanged = true;
         if (mRenderMode == RenderMode::Train)
         {
-            if (mNumSpecRays != NUM_SPEC_RAYS_TRAIN || mNumKMeansIters != NUM_KMEANS_ITERS_TRAIN)
-            {
-                mNumSpecRays = NUM_SPEC_RAYS_TRAIN;
-                mNumKMeansIters = NUM_KMEANS_ITERS_TRAIN;
-                mpConeTrace = nullptr;
-            }
+            mFrameCount = 0;
+            setConeParameters(true);
         }
         else if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
         {
-            if (mNumSpecRays != NUM_SPEC_RAYS_RENDER || mNumKMeansIters != NUM_KMEANS_ITERS_RENDER)
+            setConeParameters(false);
+        }
+    }
+
+    if (widget.button("Load model state"))
+    {
+        std::filesystem::path path;
+        if (mpNRModel && openFileDialog(kModelStateFilters, path))
+        {
+            mpNRModel->loadState(path.string());
+        }
+    }
+
+    if (widget.button("Save model state"))
+    {
+        std::filesystem::path path;
+        if (mpNRModel && saveFileDialog(kModelStateFilters, path))
+        {
+            mpNRModel->saveState(path.string());
+        }
+    }
+
+    if (widget.button("Resume training from ckpt"))
+    {
+        mVarsChanged = true;
+        std::filesystem::path path;
+        if (mpNRModel && openFileDialog(kModelStateFilters, path))
+        {
+            uint32_t frameCountFromFile = 0;
+            try
             {
-                mNumSpecRays = NUM_SPEC_RAYS_RENDER;
-                mNumKMeansIters = NUM_KMEANS_ITERS_RENDER;
-                mpConeTrace = nullptr;
+                frameCountFromFile = std::stoi(path.stem().string());
+                mFrameCount = frameCountFromFile;
+                mRenderMode = RenderMode::Train;
+                setConeParameters(true);
             }
+            catch(const std::exception& e)
+            {
+                logError(e.what());
+            }
+
+            mpNRModel->loadState(path.string());
         }
     }
 
@@ -176,6 +218,11 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     if (!mTrainCameraPath.empty())
     {
         widget.tooltip(mTrainCameraPath.string());
+    }
+
+    if (widget.checkbox("Use NEE", mUseNEE))
+    {
+        mVarsChanged = true;
     }
 }
 
@@ -233,6 +280,29 @@ void NeuralRadiosity::train(RenderContext* pRenderContext)
         resolveRHS(pRenderContext);
         // 4. Model forward (target should be written to diffColor/specColor)
         modelTrainCUDA(pRenderContext, mpTrainLHSBatch);
+    }
+
+    if (mRenderMode == RenderMode::Train)
+    {
+        const uint32_t completedSteps = mFrameCount + 1;
+
+        if (completedSteps % mSaveCKPTInterval == 0)
+        {
+            std::filesystem::path ckptPath = fmt::format("{:05d}.ckpt", completedSteps);
+            if (mpNRModel)
+            {
+                mpNRModel->saveState(ckptPath.string());
+                fmt::print("Saved checkpoint to '{}'\n", ckptPath.string());
+            }
+        }
+        updateAdaptiveRHSState(completedSteps);
+
+        if (completedSteps >= mTotalTrainSteps)
+        {
+            fmt::print("Finished training after {} steps.\n", completedSteps);
+            mRenderMode = RenderMode::Idle;
+            mVarsChanged = true;
+        }
     }
 }
 
@@ -314,7 +384,7 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     var["specVBuffer"] = mpRenderBatch->specVBuffer;
 
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
-        var["debug"] = mpTrainRHSBatch->specColor;
+        var["debug"] = mpTrainRHSBatch->emission;
 
     mpResolvePass->execute(pRenderContext, uint3(mFrameDim, 1));
 }
@@ -362,11 +432,22 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
         var["rhsRoughness"] = mpTrainRHSBatch->roughness;
         var["rhsVBuffer"] = mpTrainRHSBatch->vbuffer;
         var["rhsColor"] = mpTrainRHSBatch->color;
+        var["rhsEmission"] = mpTrainRHSBatch->emission;
 
         var["rhsDiffActive"] = mpTrainRHSBatch->diffActive;
         var["rhsDiffIndex"] = mpTrainRHSBatch->diffIndex;
         var["rhsSpecActive"] = mpTrainRHSBatch->specActive;
         var["rhsSpecIndex"] = mpTrainRHSBatch->specIndex;
+    }
+
+    if (mpEmissiveSampler)
+    {
+        var[name]["useNEE"] = mUseNEE;
+        mpEmissiveSampler->bindShaderData(var[name]["emissiveSampler"]);
+    }
+    else
+    {
+        var[name]["useNEE"] = false;
     }
 
     mpSampleRHS->execute(pRenderContext, uint3(mBatchSize * mNumRHS, 1, 1));
@@ -496,6 +577,10 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
     DefineList defines;
     defines.add(mpScene->getSceneDefines());
     defines.add(mpSampleGenerator->getDefines());
+    if (mpEmissiveSampler)
+    {
+        defines.add(mpEmissiveSampler->getDefines());
+    }
     defines.add(getShaderDefines(renderData));
 
     if (!mpFirstSmoothPass)
@@ -663,6 +748,37 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
     logInfo("NeuralRadiosity::prepareResources() took {} ms", elapsedMs);
 }
 
+bool NeuralRadiosity::prepareLighting(RenderContext* pRenderContext)
+{
+    bool lightingChanged = false;
+
+    // Request the light collection if emissive lights are enabled.
+    if (mpScene->getRenderSettings().useEmissiveLights)
+    {
+        mpScene->getILightCollection(pRenderContext);
+    }
+
+    if (mpScene->useEmissiveLights())
+    {
+        if (!mpEmissiveSampler)
+        {
+            const auto& pLights = mpScene->getILightCollection(pRenderContext);
+            FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+
+            mpEmissiveSampler = std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+
+            lightingChanged = true;
+        }
+    }
+
+    if (mpEmissiveSampler)
+    {
+        lightingChanged |= mpEmissiveSampler->update(pRenderContext, mpScene->getILightCollection(pRenderContext));
+    }
+
+    return lightingChanged;
+}
+
 void NeuralRadiosity::bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string& name)
 {
     // Bind parameters
@@ -691,6 +807,7 @@ void NeuralRadiosity::bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchB
     var["allRoughness"] = pRayBatch->roughness;
     var["allVBuffer"] = pRayBatch->vbuffer;
     var["allColor"] = pRayBatch->color;
+    var["allEmission"] = pRayBatch->emission;
 
     // Bind diffuse buffers
     var["diffActive"] = pRayBatch->diffActive;
@@ -824,4 +941,70 @@ void NeuralRadiosity::setCamera(uint32_t cameraIdx)
     pDstCamera->setISOSpeed(pSrcCamera->getISOSpeed());
     pDstCamera->setNearPlane(pSrcCamera->getNearPlane());
     pDstCamera->setFarPlane(pSrcCamera->getFarPlane());
+}
+
+void NeuralRadiosity::setConeParameters(bool train)
+{
+    if (train)
+    {
+        if (mNumSpecRays != NUM_SPEC_RAYS_TRAIN || mNumKMeansIters != NUM_KMEANS_ITERS_TRAIN)
+        {
+            mNumSpecRays = NUM_SPEC_RAYS_TRAIN;
+            mNumKMeansIters = NUM_KMEANS_ITERS_TRAIN;
+            mpConeTrace = nullptr;
+        }
+        updateAdaptiveRHSState(0, true);
+    }
+    else
+    {
+        if (mNumSpecRays != NUM_SPEC_RAYS_RENDER || mNumKMeansIters != NUM_KMEANS_ITERS_RENDER)
+        {
+            mNumSpecRays = NUM_SPEC_RAYS_RENDER;
+            mNumKMeansIters = NUM_KMEANS_ITERS_RENDER;
+            mpConeTrace = nullptr;
+        }
+    }
+}
+
+uint32_t NeuralRadiosity::getAdaptiveRHSStage(uint32_t completedSteps) const
+{
+    if (!mAdaptiveRHS || mTotalTrainSteps == 0) return 0;
+
+    uint32_t stage = 0;
+    for (uint32_t quarter = 1; quarter <= 3; ++quarter)
+    {
+        const uint32_t threshold = static_cast<uint32_t>(((uint64_t)mTotalTrainSteps * quarter + 3ull) / 4ull);
+        if (completedSteps >= threshold) ++stage;
+    }
+
+    return stage;
+}
+
+void NeuralRadiosity::updateAdaptiveRHSState(uint32_t completedSteps, bool force)
+{
+    const uint32_t stage = getAdaptiveRHSStage(completedSteps);
+    if (!force && stage == mAdaptiveRHSStage) return;
+
+    mAdaptiveRHSStage = stage;
+
+    const uint32_t targetNumRHS = mNumRHSInit << stage;
+    const uint32_t targetBatchSize = std::max(1u, mBatchSizeInit >> stage);
+    const bool rhsChanged = targetNumRHS != mNumRHS;
+    const bool batchChanged = targetBatchSize != mBatchSize;
+
+    mNumRHS = targetNumRHS;
+    mBatchSize = targetBatchSize;
+
+    if (mpTrainLHSBatch) mpTrainLHSBatch->size = mBatchSize;
+
+    if (rhsChanged)
+    {
+        mpSampleRHS = nullptr;
+        mpResolveRHS = nullptr;
+    }
+
+    if (rhsChanged || batchChanged)
+    {
+        mVarsChanged = true;
+    }
 }

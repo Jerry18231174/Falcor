@@ -3,7 +3,7 @@ import NetworkParams;
 
 
 // RHS color buffer
-RWStructuredBuffer<NetworkOutput> rhsColor;
+RWStructuredBuffer<float4> rhsColor;
 // Ray batch buffers
 RWStructuredBuffer<float4> allPos;
 RWStructuredBuffer<float4> allDir;
@@ -11,7 +11,8 @@ RWStructuredBuffer<float4> allNormal;
 RWStructuredBuffer<float4> allAlbedo;
 RWStructuredBuffer<float> allRoughness;
 RWStructuredBuffer<PackedHitInfo> allVBuffer;
-RWStructuredBuffer<NetworkOutput> allColor;
+RWStructuredBuffer<float4> allColor;
+RWStructuredBuffer<float4> allEmission;
 
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
@@ -57,7 +58,7 @@ struct ResolveRHS
         for (uint i = 0; i < numRHS; i++)
         {
             const uint rhsIdx = idx * numRHS + i;
-            lhsColor += rhsColor[rhsIdx].toFloat4();
+            lhsColor += rhsColor[rhsIdx];
         }
         lhsColor /= numRHS;
         lhsColor = select(isnan(lhsColor) | !isfinite(lhsColor), float4(0.f), lhsColor);

@@ -1,7 +1,7 @@
 import Scene.Shading;
 import Scene.RaytracingInline;
 import PathState;
-import LoadShadingData;
+import RayTraceHelper;
 import NetworkParams;
 import Utils.Sampling.SampleGenerator;
 
@@ -12,7 +12,8 @@ RWStructuredBuffer<float4> allNormal;
 RWStructuredBuffer<float4> allAlbedo;
 RWStructuredBuffer<float> allRoughness;
 RWStructuredBuffer<PackedHitInfo> allVBuffer;
-RWStructuredBuffer<NetworkOutput> allColor;
+RWStructuredBuffer<float4> allColor;
+RWStructuredBuffer<float4> allEmission;
 
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
@@ -217,7 +218,8 @@ struct RandomSmooth
         uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
 
         // Write outputs
-        allColor[idx].fromFloat4(float4(color, 0.f));
+        allColor[idx] = float4(color, 0.f);
+        allEmission[idx] = float4(0.f);
         allVBuffer[idx] = hit.pack();
 
         // Write G-Buffer

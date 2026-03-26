@@ -29,6 +29,7 @@
 #include "Falcor.h"
 #include "RenderGraph/RenderPass.h"
 #include "RenderGraph/RenderPassHelpers.h"
+#include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Utils/CudaUtils.h"
 #include "Utils/Algorithm/PrefixSum.h"
 #include "Model/Model.h"
@@ -57,6 +58,7 @@ struct RayBatchBuffer
     ref<Buffer> roughness;
     ref<Buffer> vbuffer;
     ref<Buffer> color;
+    ref<Buffer> emission;           // NEE color
     /// Diffuse buffer
     ref<Buffer> diffActive;         // Compaction Input
     ref<Buffer> diffIndex;          // Compaction Output
@@ -133,6 +135,12 @@ struct RayBatchBuffer
             );
             color = pDevice->createStructuredBuffer(
                 var["allColor"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
+            emission = pDevice->createStructuredBuffer(
+                var["allEmission"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
                 MemoryType::DeviceLocal,
                 nullptr, false
@@ -283,11 +291,15 @@ private:
     void updateFrameDim(const uint2 frameDim);
     void updatePrograms(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareResources(RenderContext* pRenderContext, const RenderData& renderData);
+    bool prepareLighting(RenderContext* pRenderContext);
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
     void bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name);
     DefineList getShaderDefines(const RenderData& renderData) const;
     bool loadTrainCamerasFromFile(const std::filesystem::path& path);
     void setCamera(uint32_t cameraIdx);
+    void setConeParameters(bool train);
+    uint32_t getAdaptiveRHSStage(uint32_t completedSteps) const;
+    void updateAdaptiveRHSState(uint32_t completedSteps, bool force = false);
 
     // Internal state & parameters
     uint32_t mFrameCount = 0;
@@ -308,6 +320,8 @@ private:
     bool mUseAlphaTest = true;
     /// Use environment lighting.
     bool mUseEnvLight = true;
+    /// User next event estimation.
+    bool mUseNEE = true;
     /// Adjust shading normals.
     bool mAdjustShadingNormals = true;
     /// Specular roughness threshold
@@ -338,6 +352,7 @@ private:
     ref<ComputePass> mpConeTrace;
     ref<SampleGenerator> mpSampleGenerator;
     std::unique_ptr<PrefixSum> mpPrefixSum;
+    std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;    ///< Emissive light sampler or nullptr if not used.
 
     // CUDA
     ref<cuda_utils::CudaDevice> mpCudaDevice;
@@ -346,9 +361,16 @@ private:
     // Train mode parameters
     RenderMode mRenderMode = RenderMode::Render;
     /// LHS and RHS
-    uint32_t mBatchSize = 1u << 16;
-    uint32_t mNumRHS = 32u;
+    uint32_t mBatchSizeInit = 1u << 16;
+    uint32_t mNumRHSInit = 32u;
+    uint32_t mBatchSize = mBatchSizeInit;
+    uint32_t mNumRHS = mNumRHSInit;
     /// Cameras used for training.
     std::vector<ref<Camera>> mTrainCameras;
     std::filesystem::path mTrainCameraPath;
+    /// Total training steps.
+    uint32_t mTotalTrainSteps = 20000;
+    uint32_t mSaveCKPTInterval = 1000;
+    bool mAdaptiveRHS = true;
+    uint32_t mAdaptiveRHSStage = 0;
 };

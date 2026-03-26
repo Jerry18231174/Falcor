@@ -19,7 +19,7 @@ template <typename T>
 class NeuralModel : public DifferentiableObject<T, T, T> {
 
 public:
-    NeuralModel();
+    NeuralModel(HashGrid::Config gridConfig);
     ~NeuralModel() = default;
 
     void inference_mixed_precision_impl(
@@ -66,7 +66,7 @@ private:
     T* mpGridsGradient;
     uint32_t mGridSize = 0;
 
-    HashGrid::Config mGridConfig = {4, 8, 19, 32, 2.0f};
+    HashGrid::Config mGridConfig;
 
     uint32_t encOffset = 0;
     uint32_t posOffset = encOffset + mGridConfig.nLevels * mGridConfig.nFeaturesPerLevel;

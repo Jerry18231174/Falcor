@@ -1,8 +1,9 @@
 import Scene.Shading;
 import Scene.RaytracingInline;
-import PathState;
-import LoadShadingData;
+import Rendering.Lights.EmissiveLightSampler;
 import Utils.Sampling.SampleGenerator;
+import PathState;
+import RayTraceHelper;
 import NetworkParams;
 
 // LHS batch buffers
@@ -19,7 +20,8 @@ RWStructuredBuffer<float4> rhsNormal;
 RWStructuredBuffer<float4> rhsAlbedo;
 RWStructuredBuffer<float> rhsRoughness;
 RWStructuredBuffer<PackedHitInfo> rhsVBuffer;
-RWStructuredBuffer<NetworkOutput> rhsColor;
+RWStructuredBuffer<float4> rhsColor;
+RWStructuredBuffer<float4> rhsEmission;
 
 RWStructuredBuffer<uint> rhsDiffActive;
 RWStructuredBuffer<uint> rhsDiffIndex;
@@ -54,15 +56,6 @@ RWStructuredBuffer<uint> rhsSpecIndex;
 #endif
 
 
-// groupshared ShadingData lSd;
-// groupshared IMaterialInstance lMi;
-// groupshared BSDFProperties lBsdfProperties;
-
-// groupshared float3 lPos;
-// groupshared float3 lDir;
-// groupshared HitInfo lHit;
-
-
 struct SampleRHS
 {
     static const bool kUseAlphaTest = USE_ALPHA_TEST;
@@ -78,6 +71,9 @@ struct SampleRHS
     uint batchSize = 0;
     uint batchCount = 0;
 
+    bool useNEE = false;
+    EmissiveLightSampler emissiveSampler;
+
     void generatePath(const uint idx, out PathState path)
     {
         path.setActive();
@@ -92,28 +88,6 @@ struct SampleRHS
         // - path.dir
         // - path.setHit(hit);
     }
-
-    // void loadLHSData(const uint idx, const uint rhsIdx)
-    // {
-    //     if (rhsIdx == 0)
-    //     {
-    //         lPos = lhsPos[idx].xyz;
-    //         lDir = lhsDir[idx].xyz;
-    //         lHit = unpackHitInfo(lhsVBuffer[idx]);
-
-    //         // Load shading data.
-    //         lSd = loadShadingData(lHit, lPos, lDir);
-    //         lSd.posW = lPos;
-
-    //         // Create material instance.
-    //         let lod = ExplicitLodTextureSampler(0.f);
-    //         let hints = getMaterialInstanceHints(lHit, true, kAdjustShadingNormals);
-    //         lMi = gScene.materials.getMaterialInstance(lSd, lod, hints);
-    //         lBsdfProperties = lMi.getProperties(lSd);
-    //     }
-
-    //     GroupMemoryBarrierWithGroupSync();
-    // }
 
     void execute(const uint idx, const uint rhsIdx)
     {
@@ -145,15 +119,8 @@ struct SampleRHS
         path.origin = lPos;
         path.dir = lDir;
         path.setHit(lHit);
-        // Sample RHS ray segment.
-        BSDFSample result = {};
-        if (valid) valid = lMi.sample(lSd, path.sg, result);
-        if (valid) valid = generateScatterRay(result, lSd, lMi, path, kSpecularRoughnessThreshold);
 
-        // Update ray.
-        Ray ray = path.getScatterRay();
-
-        // Trace rays.
+        // Prepare ray query structures.
         SceneRayQuery<kUseAlphaTest> sceneRayQuery;
         HitInfo hit;
         float3 color = float3(0.f);
@@ -165,8 +132,32 @@ struct SampleRHS
         float3 albedo = float3(0.f);
         float roughness = 1.f;
 
-        if (valid)
+        // Sample NEE.
+        LightSample ls = {};
+        bool neeValid = false;
+        if (valid && useNEE)
         {
+            neeValid = generateEmissiveSample(emissiveSampler, lSd, true, path.sg, ls);
+            neeValid &= sceneRayQuery.traceVisibilityRay(ls.getVisibilityRay(), kRayFlags);
+        }
+
+        // Sample BSDF.
+        BSDFSample bs = {};
+        bool bsdfValid = false;
+        if (valid) bsdfValid = lMi.sample(lSd, path.sg, bs);
+        if (valid) bsdfValid = generateScatterRay(bs, lSd, lMi, path, kSpecularRoughnessThreshold);
+
+        // Cross-term pdfs for MIS
+        float pEdB = 0;  // wait until first hit
+        float pBdE = neeValid ? lMi.evalPdf(lSd, ls.dir, true) : 0.f;
+        float3 neeWeight = neeValid ? lMi.eval(lSd, ls.dir, path.sg) : 0.f;
+
+        // Update ray.
+        Ray ray = path.getScatterRay();
+
+        if (bsdfValid)
+        {
+            // Trace the "first smooth" ray
             for (int i = 0; i < kMaxRecursionDepth; i++)
             {
                 float rayT = 0;
@@ -198,6 +189,12 @@ struct SampleRHS
                 path.sceneLength += float16_t(rayT);
                 path.origin = sd.computeRayOrigin();
                 path.dir = ray.dir;
+
+                // NEE pdf for BSDF sample.
+                if (i == 0)
+                {
+                    pEdB = emissiveSampler.evalPdf(lSd.posW, lSd.getOrientedFaceNormal(), true, getTriangleLightHit(hit, sd));
+                }
 
                 // Emissive surface: terminate path and write emitted radiance.
                 if (any(bsdfProperties.emission > 0.f))
@@ -249,13 +246,17 @@ struct SampleRHS
             path.terminate();
         }
 
+        // MIS evaluation
+        float misNEE = neeValid ? (ls.pdf / (ls.pdf + pBdE)) : 0.f;
+        float misBSDF = bsdfValid ? (bs.pdf / (bs.pdf + pEdB)) : 0.f;
+
         // Active mask
         uint diffAct = (path.isActive() && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
         uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
 
         // Write outputs
-        rhsColor[rayIdx].clear();
-        rhsColor[rayIdx].fromFloat4(float4(color, 0.f));
+        rhsColor[rayIdx] = float4(color * misBSDF, 0.f);
+        rhsEmission[rayIdx] = float4(ls.Li * neeWeight * misNEE, 0.f);
         rhsVBuffer[rayIdx] = hit.pack();
 
         // Write G-Buffer

@@ -29,7 +29,10 @@
 __exported import Scene.Shading;
 import Scene.Material.ShadingUtils;
 import Rendering.Materials.TexLODHelpers;
+import Rendering.Lights.EmissiveLightSampler;
+import Rendering.Lights.EmissiveLightSamplerHelpers;
 import Utils.Math.MathHelpers;
+import Utils.Geometry.GeometryHelpers;
 import PathState;
 
 
@@ -210,4 +213,62 @@ bool generateScatterRay(
     bool valid = any(path.thp > 0.f);
 
     return valid;
+}
+
+
+/** Describes a light sample.
+*/
+struct LightSample
+{
+    float3  Li;         ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
+    float   pdf;        ///< Pdf with respect to solid angle at the shading point.
+    float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
+    float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
+    float3  dir;        ///< Ray direction for visibility evaluation (normalized).
+    uint    lightType;  ///< Light type this sample comes from (LightType casted to uint).
+
+    Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance); }
+};
+
+/** Generates a light sample on the emissive geometry.
+    \param[in] emissiveSampler Emissive light sampler.
+    \param[in] sd Shading frame of the sampling surface interaction.
+    \param[in] upperHemisphere True if only upper hemisphere should be considered.
+    \param[in,out] sg Sample generator.
+    \param[out] ls Struct describing valid samples.
+    \return True if the sample is valid and has nonzero contribution, false otherwise.
+*/
+bool generateEmissiveSample(
+    const EmissiveLightSampler emissiveSampler,
+    const ShadingData sd,
+    const bool upperHemisphere,
+    inout SampleGenerator sg,
+    out LightSample ls)
+{
+    ls = {}; // Default initialization to avoid divergence at returns.
+
+    TriangleLightSample tls;
+    if (!emissiveSampler.sampleLight(sd.posW, sd.getOrientedFaceNormal(), upperHemisphere, sg, tls)) return false;
+
+    // Setup returned sample.
+    ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
+    ls.pdf = tls.pdf;
+    // Offset shading and light position to avoid self-intersection.
+    float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
+    ls.origin = sd.computeRayOrigin();
+    float3 toLight = lightPos - ls.origin;
+    ls.distance = length(toLight);
+    ls.dir = normalize(toLight);
+
+    return any(ls.Li > 0.f);
+}
+
+TriangleLightHit getTriangleLightHit(HitInfo hit, ShadingData sd)
+{
+    TriangleLightHit lightHit;
+    TriangleHit triangleHit = hit.getTriangleHit();
+    lightHit.triangleIndex = gScene.lightCollection.getTriangleIndex(triangleHit.instanceID, triangleHit.primitiveIndex);
+    lightHit.posW = sd.posW;
+    lightHit.normalW = sd.getOrientedFaceNormal();
+    return lightHit;
 }

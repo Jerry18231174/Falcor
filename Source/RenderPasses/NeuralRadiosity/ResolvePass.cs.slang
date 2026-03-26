@@ -25,7 +25,7 @@ RWStructuredBuffer<NetworkOutput> specColor;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
 // debug
-RWStructuredBuffer<NetworkOutput> debug;
+RWStructuredBuffer<float4> debug;
 
 
 #ifndef RAY_FLAGS
@@ -72,9 +72,9 @@ struct ResolvePass
             gColor[pixel] = thp * diffColor[diffIdx].toFloat4();
         }
 
-        // if ((pixIdx > 100000) && (pixIdx < 130000))
+        // if ((pixIdx > 100000) && (pixIdx < 200000))
         // {
-        //     gColor[pixel] = debug[pixIdx - 100000].toFloat4();
+        //     gColor[pixel] = debug[pixIdx - 100000];
         // }
     }
 }

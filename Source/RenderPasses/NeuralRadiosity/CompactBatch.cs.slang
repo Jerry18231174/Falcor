@@ -8,7 +8,8 @@ RWStructuredBuffer<float4> allNormal;
 RWStructuredBuffer<float4> allAlbedo;
 RWStructuredBuffer<float> allRoughness;
 RWStructuredBuffer<PackedHitInfo> allVBuffer;
-RWStructuredBuffer<NetworkOutput> allColor;
+RWStructuredBuffer<float4> allColor;
+RWStructuredBuffer<float4> allEmission;
 
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;

@@ -30,7 +30,18 @@ __global__ void clampGradients(
 } // namespace
 
 template<typename T>
-NeuralModel<T>::NeuralModel() {
+NeuralModel<T>::NeuralModel(HashGrid::Config gridConfig) {
+    mGridConfig = gridConfig;
+
+    encOffset = 0;
+    posOffset = encOffset + mGridConfig.nLevels * mGridConfig.nFeaturesPerLevel;
+    dirOffset = posOffset + 3;
+    normalOffset = dirOffset + 3;
+    albedoOffset = normalOffset + 3;
+    roughnessOffset = albedoOffset + 3;
+    totalDim = roughnessOffset + 1;
+    mInputDim = padUp(totalDim, 16);
+
     CHECK_THROW(mMaxBatchSize % 256 == 0);
 
     const json networkConfig = {

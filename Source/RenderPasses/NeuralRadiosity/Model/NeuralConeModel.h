@@ -20,7 +20,7 @@ template <typename T>
 class NeuralConeModel : public DifferentiableObject<T, T, T> {
 
 public:
-    NeuralConeModel();
+    NeuralConeModel(HashGrid::Config primGridConfig, HashGridInterp::Config clsGridConfig);
     ~NeuralConeModel() = default;
 
     void inference_mixed_precision_impl(
@@ -72,8 +72,8 @@ private:
     T* mpClsGridsGradient;
     uint32_t mClsGridSize = 0;
 
-    HashGrid::Config mPrimGridConfig = {4, 8, 19, 32, 2.0f};
-    HashGridInterp::Config mClsGridConfig = {4, 8, 8, 19, 4, 2.0f, 0.5f};
+    HashGrid::Config mPrimGridConfig;
+    HashGridInterp::Config mClsGridConfig;
 
     uint32_t primEncOffset = 0;
     uint32_t clsEncOffset = primEncOffset + mPrimGridConfig.nLevels * mPrimGridConfig.nFeaturesPerLevel;

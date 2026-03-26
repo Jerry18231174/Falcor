@@ -3,6 +3,9 @@
 #include "NeuralConeModel.h"
 #include <cuda_runtime.h>
 #include <iostream>
+#include <fstream>
+#include <vector>
+#include <nlohmann/json.hpp>
 #include "tiny-cuda-nn/config.h"
 #include "tiny-cuda-nn/loss.h"
 #include "tiny-cuda-nn/optimizer.h"
@@ -14,7 +17,19 @@
 NRModel::NRModel() {
     CUDA_CHECK_THROW(cudaStreamCreate(&mStream));
 
-    mpDiffNet = std::make_shared<tcnn::NeuralModel<float>>();
+    HashGrid::Config gridConfig{nLevels, nFeaturesPerLevel, log2HashMapSize, baseResolution, perLevelScale};
+    HashGrid::Config primGridConfig{nLevels, nFeaturesPerLevel, log2HashMapSize, baseResolution, perLevelScale};
+    HashGridInterp::Config clsGridConfig{
+        numClusters,
+        nInterpLevels,
+        nInterpFeaturesPerLevel,
+        log2InterpHashMapSize,
+        baseInterpResolution,
+        perLevelInterpScale,
+        interpRatio
+    };
+
+    mpDiffNet = std::make_shared<tcnn::NeuralModel<float>>(gridConfig);
     {
         auto optimizer = std::shared_ptr<tcnn::Optimizer<float>>(tcnn::create_optimizer<float>({
             {"otype", "Adam"},
@@ -24,7 +39,7 @@ NRModel::NRModel() {
         mpDiffTrainer = std::make_unique<tcnn::Trainer<float, float, float>>(mpDiffNet, optimizer, loss);
     }
 
-    mpSpecNet = std::make_shared<tcnn::NeuralConeModel<float>>();
+    mpSpecNet = std::make_shared<tcnn::NeuralConeModel<float>>(primGridConfig, clsGridConfig);
     {
         auto optimizer = std::shared_ptr<tcnn::Optimizer<float>>(tcnn::create_optimizer<float>({
             {"otype", "Adam"},
@@ -47,6 +62,31 @@ NRModel::~NRModel() {
     if (mStream) {
         CUDA_CHECK_THROW(cudaStreamDestroy(mStream));
     }
+}
+
+void NRModel::saveState(const std::string& path) {
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+
+    nlohmann::json ckpt;
+    ckpt["format"] = "nr_tcnn_ckpt_v1";
+    ckpt["diff"] = mpDiffTrainer->serialize(true);
+    ckpt["spec"] = mpSpecTrainer->serialize(true);
+
+    std::ofstream ofs(path, std::ios::binary);
+    const std::vector<std::uint8_t> cbor = nlohmann::json::to_cbor(ckpt);
+    ofs.write(reinterpret_cast<const char*>(cbor.data()), static_cast<std::streamsize>(cbor.size()));
+}
+
+void NRModel::loadState(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) return;
+
+    const std::vector<std::uint8_t> cbor((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    nlohmann::json ckpt = nlohmann::json::from_cbor(cbor);
+    mpDiffTrainer->deserialize(ckpt.at("diff"));
+    mpSpecTrainer->deserialize(ckpt.at("spec"));
+
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
 }
 
 void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {

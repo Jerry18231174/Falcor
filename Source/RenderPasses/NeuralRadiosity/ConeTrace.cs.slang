@@ -1,7 +1,7 @@
 import Scene.Shading;
 import Scene.RaytracingInline;
 import PathState;
-import LoadShadingData;
+import RayTraceHelper;
 import NetworkParams;
 
 #include "Utils/Math/MathConstants.slangh"

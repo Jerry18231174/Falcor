@@ -1,11 +1,19 @@
 
 
 #ifndef N_LEVELS
-#define N_LEVELS 4
+#define N_LEVELS 6
 #endif
 
 #ifndef N_FEATURES_PER_LEVEL
-#define N_FEATURES_PER_LEVEL 8
+#define N_FEATURES_PER_LEVEL 4
+#endif
+
+#ifndef N_LEVELS_SPEC
+#define N_LEVELS_SPEC 8
+#endif
+
+#ifndef N_FEATURES_PER_LEVEL_SPEC
+#define N_FEATURES_PER_LEVEL_SPEC 8
 #endif
 
 #ifndef NUM_CLUSTERS
@@ -90,7 +98,7 @@ struct SpecNetInput
     static const uint padDim = 16;
     static const uint numClusters = NUM_CLUSTERS;
     static const uint primEncDim = N_FEATURES_PER_LEVEL * N_LEVELS;
-    static const uint clsEncDim = N_FEATURES_PER_LEVEL * NUM_CLUSTERS;
+    static const uint clsEncDim = N_FEATURES_PER_LEVEL_SPEC * NUM_CLUSTERS;
 
     static const uint posOffset = primEncDim + clsEncDim;
     static const uint dirOffset = posOffset + 3;

@@ -8,7 +8,8 @@ RWStructuredBuffer<float4> allNormal;
 RWStructuredBuffer<float4> allAlbedo;
 RWStructuredBuffer<float> allRoughness;
 RWStructuredBuffer<PackedHitInfo> allVBuffer;
-RWStructuredBuffer<NetworkOutput> allColor;
+RWStructuredBuffer<float4> allColor;
+RWStructuredBuffer<float4> allEmission;
 
 RWStructuredBuffer<uint> diffActive;
 RWStructuredBuffer<uint> diffIndex;
@@ -44,17 +45,17 @@ struct ResolveBatch
     {
         if (any(idx >= batchSize)) return;
 
-        float4 thp = allColor[idx].toFloat4();
+        float4 thp = allColor[idx];
 
         if (specActive[idx] != 0)
         {
             const uint specIdx = specIndex[idx];
-            allColor[idx].fromFloat4(thp * specColor[specIdx].toFloat4());
+            allColor[idx] = thp * specColor[specIdx].toFloat4() + allEmission[idx];
         }
         else if (diffActive[idx] != 0)
         {
             const uint diffIdx = diffIndex[idx];
-            allColor[idx].fromFloat4(thp * diffColor[diffIdx].toFloat4());
+            allColor[idx] = thp * diffColor[diffIdx].toFloat4() + allEmission[idx];
         }
     }
 }
