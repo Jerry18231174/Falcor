@@ -361,7 +361,7 @@ private:
     // Train mode parameters
     RenderMode mRenderMode = RenderMode::Render;
     /// LHS and RHS
-    uint32_t mBatchSizeInit = 1u << 16;
+    uint32_t mBatchSizeInit = 1u << 15;
     uint32_t mNumRHSInit = 32u;
     uint32_t mBatchSize = mBatchSizeInit;
     uint32_t mNumRHS = mNumRHSInit;

@@ -157,6 +157,7 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
         {
             setConeParameters(false);
         }
+        if (mpNRModel) mpNRModel->setOnline(mRenderMode == RenderMode::OnlineTrain);
     }
 
     if (widget.button("Load model state"))
@@ -318,6 +319,8 @@ void NeuralRadiosity::firstSmoothPass(RenderContext* pRenderContext, const Rende
     var["specActive"] = mpRenderBatch->specActive;
     var["specIndex"] = mpRenderBatch->specIndex;
 
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+
     mpFirstSmoothPass->execute(pRenderContext, uint3(mFrameDim, 1));
 }
 
@@ -402,6 +405,8 @@ void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_pt
     ShaderVar var = mpRandomSmooth->getRootVar();
     bindRayBatchData(var, pRayBatch, "gRandomSmooth");
 
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+
     mpRandomSmooth->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
 }
 
@@ -449,6 +454,8 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
     {
         var[name]["useNEE"] = false;
     }
+
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
     mpSampleRHS->execute(pRenderContext, uint3(mBatchSize * mNumRHS, 1, 1));
 }
@@ -518,6 +525,8 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
 
     var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specInput"] = pRayBatch->specInput;
+
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
     mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
 }

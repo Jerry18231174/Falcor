@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <string>
 
 
 namespace tcnn
@@ -48,17 +49,28 @@ public:
     void loadState(const std::string& path);
     void saveState(const std::string& path);
 
+    void setOnline(bool online);
+
     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
 
     cudaStream_t stream() const { return mStream; }
 
 private:
-    std::shared_ptr<tcnn::NeuralModel<float>> mpDiffNet;
-    std::shared_ptr<tcnn::NeuralConeModel<float>> mpSpecNet;
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpDiffTrainer;
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpSpecTrainer;
+    std::shared_ptr<tcnn::NeuralModel<float>> mpDiffOfflineNet;
+    std::shared_ptr<tcnn::NeuralModel<float>> mpDiffOnlineNet;
+    std::shared_ptr<tcnn::NeuralConeModel<float>> mpSpecOfflineNet;
+    std::shared_ptr<tcnn::NeuralConeModel<float>> mpSpecOnlineNet;
+    tcnn::NeuralModel<float>* mpDiffNet = nullptr;
+    tcnn::NeuralConeModel<float>* mpSpecNet = nullptr;
+    std::unique_ptr<tcnn::Trainer<float, float, float>> mpDiffOfflineTrainer;
+    std::unique_ptr<tcnn::Trainer<float, float, float>> mpSpecOfflineTrainer;
+    std::unique_ptr<tcnn::Trainer<float, float, float>> mpDiffOnlineTrainer;
+    std::unique_ptr<tcnn::Trainer<float, float, float>> mpSpecOnlineTrainer;
+    tcnn::Trainer<float, float, float>* mpDiffTrainer = nullptr;
+    tcnn::Trainer<float, float, float>* mpSpecTrainer = nullptr;
     cudaStream_t mStream;
+    bool mOnline = false;
 
     std::shared_ptr<tcnn::GPUMemory<float>> mpdLdDiffInput;
     std::shared_ptr<tcnn::GPUMemory<float>> mpdLdSpecInput;

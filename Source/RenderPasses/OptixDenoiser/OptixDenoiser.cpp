@@ -58,6 +58,21 @@ const std::string kConvertTexToBufFile = "RenderPasses/OptixDenoiser/ConvertTexT
 const std::string kConvertNormalsToBufFile = "RenderPasses/OptixDenoiser/ConvertNormalsToBuf.cs.slang";
 const std::string kConvertMotionVecFile = "RenderPasses/OptixDenoiser/ConvertMotionVectorInputs.cs.slang";
 const std::string kConvertBufToTexFile = "RenderPasses/OptixDenoiser/ConvertBufToTex.ps.slang";
+
+void checkOptixResult(OptixResult result, const char* call)
+{
+    if (result != OPTIX_SUCCESS)
+    {
+        FALCOR_THROW(
+            "OptiX call {} failed with error {} ({}).",
+            call,
+            optixGetErrorName(result),
+            optixGetErrorString(result)
+        );
+    }
+}
+
+#define FALCOR_OPTIX_CHECK(call) checkOptixResult((call), #call)
 }; // namespace
 
 static void regOptixDenoiser(pybind11::module& m)
@@ -325,27 +340,27 @@ void OptixDenoiser_::execute(RenderContext* pRenderContext, const RenderData& re
         // Compute average intensity, if needed
         if (mDenoiser.params.hdrIntensity)
         {
-            optixDenoiserComputeIntensity(
+            FALCOR_OPTIX_CHECK(optixDenoiserComputeIntensity(
                 mDenoiser.denoiser,
                 nullptr, // CUDA stream
                 &mDenoiser.layer.input,
                 mDenoiser.params.hdrIntensity,
                 mDenoiser.scratchBuffer.getDevicePtr(),
                 mDenoiser.scratchBuffer.getSize()
-            );
+            ));
         }
 
         // Compute average color, if needed
         if (mDenoiser.params.hdrAverageColor)
         {
-            optixDenoiserComputeAverageColor(
+            FALCOR_OPTIX_CHECK(optixDenoiserComputeAverageColor(
                 mDenoiser.denoiser,
                 nullptr, // CUDA stream
                 &mDenoiser.layer.input,
                 mDenoiser.params.hdrAverageColor,
                 mDenoiser.scratchBuffer.getDevicePtr(),
                 mDenoiser.scratchBuffer.getSize()
-            );
+            ));
         }
 
         // On the first frame with a new denoiser, we have no prior input for temporal denoising.
@@ -356,7 +371,7 @@ void OptixDenoiser_::execute(RenderContext* pRenderContext, const RenderData& re
         }
 
         // Run denoiser
-        optixDenoiserInvoke(
+        FALCOR_OPTIX_CHECK(optixDenoiserInvoke(
             mDenoiser.denoiser,
             nullptr, // CUDA stream
             &mDenoiser.params,
@@ -369,7 +384,7 @@ void OptixDenoiser_::execute(RenderContext* pRenderContext, const RenderData& re
             0u,                    // (Tile) Input offset Y
             mDenoiser.scratchBuffer.getDevicePtr(),
             mDenoiser.scratchBuffer.getSize()
-        );
+        ));
 
         pRenderContext->waitForCuda();
 
@@ -470,17 +485,19 @@ void OptixDenoiser_::setupDenoiser()
     }
 
     // Create the denoiser
-    optixDenoiserCreate(mOptixContext, mDenoiser.modelKind, &mDenoiser.options, &mDenoiser.denoiser);
+    FALCOR_OPTIX_CHECK(optixDenoiserCreate(mOptixContext, mDenoiser.modelKind, &mDenoiser.options, &mDenoiser.denoiser));
 
     // Find out how much memory is needed for the requested denoiser
-    optixDenoiserComputeMemoryResources(mDenoiser.denoiser, mDenoiser.tileWidth, mDenoiser.tileHeight, &mDenoiser.sizes);
+    FALCOR_OPTIX_CHECK(
+        optixDenoiserComputeMemoryResources(mDenoiser.denoiser, mDenoiser.tileWidth, mDenoiser.tileHeight, &mDenoiser.sizes)
+    );
 
     // Allocate/resize some temporary CUDA buffers for internal OptiX processing/state
     mDenoiser.scratchBuffer.resize(mDenoiser.sizes.withoutOverlapScratchSizeInBytes);
     mDenoiser.stateBuffer.resize(mDenoiser.sizes.stateSizeInBytes);
 
     // Finish setup of the denoiser
-    optixDenoiserSetup(
+    FALCOR_OPTIX_CHECK(optixDenoiserSetup(
         mDenoiser.denoiser,
         nullptr,
         mDenoiser.tileWidth + 2 * mDenoiser.tileOverlap,  // Should work with tiling if parameters set appropriately
@@ -489,7 +506,7 @@ void OptixDenoiser_::setupDenoiser()
         mDenoiser.stateBuffer.getSize(),
         mDenoiser.scratchBuffer.getDevicePtr(),
         mDenoiser.scratchBuffer.getSize()
-    );
+    ));
 }
 
 void OptixDenoiser_::convertMotionVectors(RenderContext* pRenderContext, const ref<Texture>& tex, const ref<Buffer>& buf, const uint2& size)
