@@ -320,3 +320,23 @@ void writeSpecInputClsBuffer(
     buffer[idx].data[SpecNetInput::clsScaleOffset + clusterIdx] = clsScale;
     buffer[idx].data[SpecNetInput::clsWeightOffset + clusterIdx] = clsWeight;
 }
+
+float nan_to_num(float x, float fallback = 0.f)
+{
+    return (isnan(x) || !isfinite(x)) ? fallback : x;
+}
+
+float2 nan_to_num(float2 v, float fallback = 0.f)
+{
+    return select(isnan(v) | !isfinite(v), float2(fallback), v);
+}
+
+float3 nan_to_num(float3 v, float fallback = 0.f)
+{
+    return select(isnan(v) | !isfinite(v), float3(fallback), v);
+}
+
+float4 nan_to_num(float4 v, float fallback = 0.f)
+{
+    return select(isnan(v) | !isfinite(v), float4(fallback), v);
+}

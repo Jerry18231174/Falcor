@@ -4,6 +4,7 @@ import PathState;
 import RayTraceHelper;
 import NetworkParams;
 import Utils.Sampling.SampleGenerator;
+import Utils.Math.MathHelpers;
 
 // Ray batch buffers
 RWStructuredBuffer<float4> allPos;
@@ -65,6 +66,7 @@ struct RandomSmooth
     static const float kSpecularRoughnessThreshold = SPECULAR_ROUGHNESS_THRESHOLD;
     static const uint kRandomBase = 2654435761u;
     static const float kRSRRProb = RS_RR_PROB;
+    static const bool kRandomWi = true;
 
     uint batchSize = 0;
     uint batchCount = 0;
@@ -186,7 +188,20 @@ struct RandomSmooth
                 else
                 {
                     pos = path.origin;
-                    dir = path.dir;
+                    if (kRandomWi)
+                    {
+                        float wiPdf = 0.f;
+                        float3 wiLocal = sample_cosine_hemisphere_concentric(sampleNext2D(path.sg), wiPdf);
+                        if ((dot(wiLocal, sd.faceN) * dot(sd.frame.toLocal(path.dir), sd.faceN)) < 0)
+                        {
+                            wiLocal = -wiLocal;
+                        }
+                        dir = sd.frame.fromLocal(wiLocal);
+                    }
+                    else
+                    {
+                        dir = path.dir;
+                    }
                     normal = sd.frame.N;
                     roughness = bsdfProperties.roughness;
                     albedo = all(bsdfProperties.diffuseReflectionAlbedo < 0.01f) ? 
