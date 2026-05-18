@@ -39,11 +39,11 @@ NRModel::NRModel() {
 
     nlohmann::json offlineOptConfig = nlohmann::json({
         {"otype", "Adam"},
-        {"learning_rate", 1e-3f}
+        {"learning_rate", 1e-2f}
     });
     nlohmann::json onlineOptConfig = nlohmann::json({
         {"otype", "EMA"},
-        {"decay", 0.8f},
+        {"decay", 0.9f},
         {"nested", offlineOptConfig}
     });
     nlohmann::json lossConfig = nlohmann::json({

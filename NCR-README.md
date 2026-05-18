@@ -6,6 +6,7 @@ To run this module, we need **Falcor** and **tiny-cuda-nn** properly compiled. I
 
 ### Compiling Falcor
 
+* `git submodule update --init --recursive`
 * Follow Falcor's `README.md`:
 * `cmake --preset linux-gcc`
 * `cmake --build build/linux-gcc`
