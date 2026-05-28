@@ -26,6 +26,13 @@ RWStructuredBuffer<PackedHitInfo> specVBuffer;
 
 // debug
 RWStructuredBuffer<float4> debug;
+struct TemporalSpecHistory
+{
+    float mean[4];
+    float std[4];
+    float count[4];
+};
+RWStructuredBuffer<TemporalSpecHistory> temporalHistory;
 
 
 #ifndef RAY_FLAGS
@@ -65,6 +72,13 @@ struct ResolvePass
             // gNormal[pixel] = float4(clusterScale[specIdx * 4], clusterScale[specIdx * 4 + 1], clusterScale[specIdx * 4 + 3], 1.0f);
             // gAlbedo[pixel] = float4(clusterWeight[specIdx * 4], clusterWeight[specIdx * 4 + 1], clusterWeight[specIdx * 4 + 3], 1.0f);
             // gRoughness[pixel] = clusterScale[visIdx];
+            TemporalSpecHistory history = temporalHistory[specIdx];
+            float totalCount = history.count[0] + history.count[1] + history.count[2] + history.count[3];
+            gPos[pixel] = float4(history.count[0], history.count[1], history.count[3], history.count[2]) / totalCount;
+            gDir[pixel] = float4(history.std[0], history.std[0], history.std[0], 1.0f) / 1.f;
+            gNormal[pixel] = float4(history.std[1], history.std[1], history.std[1], 1.0f) / 1.f;
+            gAlbedo[pixel] = float4(history.std[2], history.std[2], history.std[2], 1.0f) / 1.f;
+            gRoughness[pixel] = history.std[3] / 1.f;
         }
         else if (diffActive[pixIdx] != 0)
         {

@@ -267,6 +267,7 @@ public:
     virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
     virtual void renderUI(Gui::Widgets& widget) override;
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
+    virtual void onSceneUpdates(RenderContext* pRenderContext, IScene::UpdateFlags sceneUpdates) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
@@ -292,6 +293,8 @@ private:
     void updatePrograms(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareResources(RenderContext* pRenderContext, const RenderData& renderData);
     bool prepareLighting(RenderContext* pRenderContext);
+    void updateRenderTemporalHistory(RenderContext* pRenderContext);
+    void clearRenderTemporalHistory(RenderContext* pRenderContext);
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
     void bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name);
     DefineList getShaderDefines(const RenderData& renderData) const;
@@ -326,6 +329,8 @@ private:
     bool mAdjustShadingNormals = true;
     /// Specular roughness threshold
     float mSpecularRoughnessThreshold = 0.5f;
+    /// Enable temporal reuse for render-batch specular cone tracing.
+    bool mEnableRenderSpecTemporalReuse = true;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
@@ -338,6 +343,10 @@ private:
     std::shared_ptr<RayBatchBuffer> mpRenderBatch;
     std::shared_ptr<RayBatchBuffer> mpTrainLHSBatch;
     std::shared_ptr<RayBatchBuffer> mpTrainRHSBatch;
+    ref<Buffer> mpRenderSpecTemporalHistory;
+    bool mRenderSpecTemporalHistoryValid = false;
+    bool mHasRenderCameraViewProj = false;
+    float4x4 mRenderCameraViewProj = float4x4();
 
     // Scene & Compute Passes
     ref<Scene> mpScene;

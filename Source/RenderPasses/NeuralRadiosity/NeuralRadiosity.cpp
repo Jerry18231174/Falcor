@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <random>
@@ -125,6 +126,11 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     // Prepare resources.
     prepareResources(pRenderContext, renderData);
 
+    if (mEnableRenderSpecTemporalReuse && (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain))
+    {
+        updateRenderTemporalHistory(pRenderContext);
+    }
+
     mVarsChanged = false;
 
     // Render the scene.
@@ -225,6 +231,14 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         mVarsChanged = true;
     }
+
+    if (widget.checkbox("Temporal Spec Reuse", mEnableRenderSpecTemporalReuse))
+    {
+        if (mpRenderSpecTemporalHistory)
+        {
+            clearRenderTemporalHistory(mpDevice->getRenderContext());
+        }
+    }
 }
 
 void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -233,7 +247,24 @@ void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& 
     mpFirstSmoothPass = nullptr;
     mpConeTrace = nullptr;
     mpResolvePass = nullptr;
+    mpRenderSpecTemporalHistory = nullptr;
+    mRenderSpecTemporalHistoryValid = false;
+    mHasRenderCameraViewProj = false;
     mVarsChanged = true;
+}
+
+void NeuralRadiosity::onSceneUpdates(RenderContext* pRenderContext, IScene::UpdateFlags sceneUpdates)
+{
+    if (is_set(sceneUpdates, IScene::UpdateFlags::GeometryMoved))
+    {
+        clearRenderTemporalHistory(pRenderContext);
+    }
+
+    if (is_set(sceneUpdates, IScene::UpdateFlags::LightIntensityChanged) ||
+        is_set(sceneUpdates, IScene::UpdateFlags::EnvMapChanged))
+    {
+        // Light changed.
+    }
 }
 
 // Private methods
@@ -386,6 +417,8 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     var["specColor"] = mpRenderBatch->specColor;
     var["specVBuffer"] = mpRenderBatch->specVBuffer;
 
+    var["temporalHistory"] = mpRenderSpecTemporalHistory;
+
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
         var["debug"] = mpTrainRHSBatch->emission;
 
@@ -525,10 +558,18 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
 
     var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specInput"] = pRayBatch->specInput;
+    var["temporalHistory"] = mpRenderSpecTemporalHistory;
+    var[name]["enableTemporalHistory"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse) ? 1u : 0u;
+    var[name]["useTemporalReuse"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse && mRenderSpecTemporalHistoryValid) ? 1u : 0u;
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
     mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
+
+    if (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse)
+    {
+        mRenderSpecTemporalHistoryValid = true;
+    }
 }
 
 void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -752,9 +793,50 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
         mpTrainRHSBatch->resize(mBatchSize * mNumRHS, mNumClusters);
     }
 
+    const uint32_t historySize = mpRenderBatch ? mpRenderBatch->size : 0u;
+    if (historySize > 0 && (!mpRenderSpecTemporalHistory || mpRenderSpecTemporalHistory->getElementCount() != historySize))
+    {
+        ShaderVar coneTraceVar = mpConeTrace->getRootVar();
+        mpRenderSpecTemporalHistory = mpDevice->createStructuredBuffer(
+            coneTraceVar["temporalHistory"],
+            historySize,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            MemoryType::DeviceLocal,
+            nullptr,
+            false
+        );
+        clearRenderTemporalHistory(pRenderContext);
+        mHasRenderCameraViewProj = false;
+    }
+
     const auto endTime = std::chrono::steady_clock::now();
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
     logInfo("NeuralRadiosity::prepareResources() took {} ms", elapsedMs);
+}
+
+void NeuralRadiosity::updateRenderTemporalHistory(RenderContext* pRenderContext)
+{
+    if (!mpScene || !mpRenderSpecTemporalHistory) return;
+
+    const auto& pCamera = mpScene->getCamera();
+    if (!pCamera) return;
+
+    const float4x4 viewProj = pCamera->getViewProjMatrix();
+    
+    if (!mHasRenderCameraViewProj || std::memcmp(&viewProj, &mRenderCameraViewProj, sizeof(float4x4)) != 0)
+    {
+        clearRenderTemporalHistory(pRenderContext);
+        mRenderCameraViewProj = viewProj;
+        mHasRenderCameraViewProj = true;
+    }
+}
+
+void NeuralRadiosity::clearRenderTemporalHistory(RenderContext* pRenderContext)
+{
+    if (!mpRenderSpecTemporalHistory) return;
+
+    pRenderContext->clearUAV(mpRenderSpecTemporalHistory->getUAV().get(), float4(0.f));
+    mRenderSpecTemporalHistoryValid = false;
 }
 
 bool NeuralRadiosity::prepareLighting(RenderContext* pRenderContext)
