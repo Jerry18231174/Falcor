@@ -61,6 +61,10 @@ namespace
         {"ckpt", "Binary Files"},
     };
 
+    const char kEnableTemporalSpecReuse[] = "enableTemporalSpecReuse";
+    const char kConeTraceReuseMode[] = "coneTraceReuseMode";
+    const char kTemporalSpecClusterMode[] = "temporalSpecClusterMode";
+
     float3 parseFloat3(const nlohmann::json& value, std::string_view key)
     {
         if (!value.is_array() || value.size() != 3)
@@ -79,7 +83,15 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 
 NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
-    // parseProperties();
+    for (const auto& [key, value] : props)
+    {
+        if (key == kEnableTemporalSpecReuse)
+            mEnableRenderSpecTemporalReuse = value;
+        else if (key == kConeTraceReuseMode || key == kTemporalSpecClusterMode)
+            mConeTraceReuseMode = value;
+        else
+            logWarning("Unknown property '{}' in NeuralRadiosity properties.", key);
+    }
 
     // Create random engine
     mpSampleGenerator = SampleGenerator::create(mpDevice, SAMPLE_GENERATOR_DEFAULT);
@@ -87,7 +99,10 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
 
 Properties NeuralRadiosity::getProperties() const
 {
-    return {};
+    Properties props;
+    props[kEnableTemporalSpecReuse] = mEnableRenderSpecTemporalReuse;
+    props[kConeTraceReuseMode] = mConeTraceReuseMode;
+    return props;
 }
 
 RenderPassReflection NeuralRadiosity::reflect(const CompileData& compileData)
@@ -234,6 +249,16 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
 
     if (widget.checkbox("Temporal Spec Reuse", mEnableRenderSpecTemporalReuse))
     {
+        mVarsChanged = true;
+        if (mpRenderSpecTemporalHistory)
+        {
+            clearRenderTemporalHistory(mpDevice->getRenderContext());
+        }
+    }
+
+    if (widget.dropdown("Cone Trace Reuse Mode", mConeTraceReuseMode))
+    {
+        mVarsChanged = true;
         if (mpRenderSpecTemporalHistory)
         {
             clearRenderTemporalHistory(mpDevice->getRenderContext());
@@ -561,6 +586,7 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
     var["temporalHistory"] = mpRenderSpecTemporalHistory;
     var[name]["enableTemporalHistory"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse) ? 1u : 0u;
     var[name]["useTemporalReuse"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse && mRenderSpecTemporalHistoryValid) ? 1u : 0u;
+    var[name]["coneTraceReuseMode"] = (uint32_t)mConeTraceReuseMode;
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 

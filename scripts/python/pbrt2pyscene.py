@@ -9,7 +9,7 @@ This script is intentionally scoped to the subset used by
 - Camera "perspective"
 - Film / Sampler / PixelFilter / Integrator (parsed, mostly emitted as comments)
 - Texture "...\" \"float|spectrum\" \"imagemap\""
-- MakeNamedMaterial / NamedMaterial
+- MakeNamedMaterial / NamedMaterial / Material
 - AreaLightSource "diffuse"
 - Shape "plymesh"
 - Shape "trianglemesh"
@@ -44,6 +44,10 @@ K_INVERT_Z = (
     (0.0, 0.0, -1.0, 0.0),
     (0.0, 0.0, 0.0, 1.0),
 )
+NAMED_RGB_SPECTRA = {
+    "metal-Ag-eta": [1.65746, 0.880369, 0.521229],
+    "metal-Ag-k": [9.223869, 6.269523, 4.837001],
+}
 
 
 def fail(message: str, source_path: Optional[Path] = None, line: Optional[int] = None) -> NoReturn:
@@ -304,6 +308,11 @@ def format_transform_expr(matrix: List[List[float]]) -> str:
     return f"Transform({', '.join(args)})"
 
 
+def envmap_rotation_from_transform(matrix: List[List[float]]) -> List[float]:
+    _, _, rotation_euler_deg = decompose_transform(matrix)
+    return [-value for value in rotation_euler_deg]
+
+
 @dataclass
 class Param:
     kind: str
@@ -336,6 +345,13 @@ class AreaLightDef:
 
 
 @dataclass
+class InfiniteLightDef:
+    params: Dict[str, Param]
+    transform: List[List[float]]
+    line: int
+
+
+@dataclass
 class ShapeDef:
     shape_type: str
     params: Dict[str, Param]
@@ -357,6 +373,7 @@ class SceneData:
     pixel_filter_name: Optional[str] = None
     textures: Dict[str, TextureDef] = field(default_factory=dict)
     materials: Dict[str, MaterialDef] = field(default_factory=dict)
+    infinite_lights: List[InfiniteLightDef] = field(default_factory=list)
     shapes: List[ShapeDef] = field(default_factory=list)
 
 
@@ -478,6 +495,16 @@ def get_rgb(params: Dict[str, Param], name: str, default: List[float], source_pa
     if param is None:
         return list(default)
     values = maybe_list(param)
+    if len(values) == 1:
+        value = values[0]
+        if isinstance(value, str):
+            rgb = NAMED_RGB_SPECTRA.get(value)
+            if rgb is None:
+                fail(f"unsupported named spectrum '{value}' for parameter '{name}'", source_path, param.line if param else line)
+            return list(rgb)
+        if isinstance(value, (int, float)):
+            scalar = float(value)
+            return [scalar, scalar, scalar]
     if len(values) != 3:
         fail(f"parameter '{name}' must have 3 components", source_path, param.line if param else line)
     return [float(v) for v in values]
@@ -510,6 +537,43 @@ def reflectance_to_eta_k(reflectance: List[float]) -> tuple[List[float], List[fl
     eta = [1.0, 1.0, 1.0]
     k = [2.0 * math.sqrt(c) / math.sqrt(1.0 - c) for c in r]
     return eta, k
+
+
+def get_scalar_roughness(params: Dict[str, Param]) -> float:
+    uroughness, vroughness = get_roughness_pair(params)
+    return 0.5 * (uroughness + vroughness)
+
+
+def get_scalar_eta(params: Dict[str, Param], default: float = 1.5) -> float:
+    param = params.get("eta")
+    if param is None:
+        return default
+    values = maybe_list(param)
+    if len(values) == 1:
+        value = values[0]
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            rgb = NAMED_RGB_SPECTRA.get(value)
+            if rgb is not None:
+                return sum(rgb) / 3.0
+    rgb = get_rgb(params, "eta", [default, default, default], None, param.line)
+    return sum(rgb) / 3.0
+
+
+def conductor_specular_albedo(params: Dict[str, Param], source_path: Optional[Path] = None, line: Optional[int] = None) -> List[float]:
+    if "reflectance" in params:
+        return get_rgb(params, "reflectance", [0.5, 0.5, 0.5], source_path, line)
+
+    eta = get_rgb(params, "eta", [1.65746, 0.880369, 0.521229], source_path, line)
+    k = get_rgb(params, "k", [9.223869, 6.269523, 4.837001], source_path, line)
+
+    reflectance = []
+    for eta_i, k_i in zip(eta, k):
+        numerator = (eta_i - 1.0) * (eta_i - 1.0) + k_i * k_i
+        denominator = (eta_i + 1.0) * (eta_i + 1.0) + k_i * k_i
+        reflectance.append(numerator / denominator)
+    return reflectance
 
 
 def resolve_asset_path(asset: str, source_dir: Path, output_dir: Path) -> str:
@@ -576,12 +640,34 @@ def parse_scene(path: Path) -> SceneData:
             if not material_type:
                 fail(f"material '{material_name}' is missing string type", path, keyword_token.line)
             scene.materials[material_name] = MaterialDef(material_name, material_type, params, keyword_token.line)
+        elif keyword == "Material":
+            if not world_started:
+                fail("Material must appear inside WorldBegin", path, keyword_token.line)
+            material_type = unquote(stream.pop())
+            params = stream.parse_param_list()
+            material_name = f"__inline_material_{len(scene.materials)}"
+            scene.materials[material_name] = MaterialDef(material_name, material_type, params, keyword_token.line)
+            state.current_material = material_name
         elif keyword == "NamedMaterial":
             state.current_material = unquote(stream.pop())
         elif keyword == "AreaLightSource":
             light_type = unquote(stream.pop())
             params = stream.parse_param_list()
             state.area_light = AreaLightDef(light_type=light_type, params=params, line=keyword_token.line)
+        elif keyword == "LightSource":
+            if not world_started:
+                fail("LightSource must appear inside WorldBegin", path, keyword_token.line)
+            light_type = unquote(stream.pop())
+            params = stream.parse_param_list()
+            if light_type != "infinite":
+                fail(f"unsupported light source type '{light_type}'", path, keyword_token.line)
+            scene.infinite_lights.append(
+                InfiniteLightDef(
+                    params=params,
+                    transform=copy.deepcopy(state.transform),
+                    line=keyword_token.line,
+                )
+            )
         elif keyword == "AttributeBegin":
             stack.append(copy.deepcopy(state))
         elif keyword == "AttributeEnd":
@@ -638,13 +724,19 @@ def emit_material(
     source_dir: Path,
     output_dir: Path,
     source_path: Path,
+    use_pbrt_materials: bool,
 ) -> str:
     material_var = emitter.unique(material.name)
     material_type = material.material_type
     params = material.params
 
     if material_type == "diffuse":
-        emitter.add(f"{material_var} = PBRTDiffuseMaterial({material.name!r})")
+        if use_pbrt_materials:
+            emitter.add(f"{material_var} = PBRTDiffuseMaterial({material.name!r})")
+        else:
+            emitter.add(f"{material_var} = StandardMaterial({material.name!r})")
+            emitter.add(f"{material_var}.metallic = 0.0")
+            emitter.add(f"{material_var}.roughness = 1.0")
         if "reflectance" in params and params["reflectance"].kind == "texture":
             texture_name = get_string(params, "reflectance")
             texture = textures.get(texture_name)
@@ -660,7 +752,13 @@ def emit_material(
             )
         emitter.add(f"{material_var}.doubleSided = True")
     elif material_type == "coateddiffuse":
-        emitter.add(f"{material_var} = PBRTCoatedDiffuseMaterial({material.name!r})")
+        if use_pbrt_materials:
+            emitter.add(f"{material_var} = PBRTCoatedDiffuseMaterial({material.name!r})")
+            emitter.add(f"{material_var}.roughness = {format_float2(get_roughness_pair(params))}")
+        else:
+            emitter.add(f"{material_var} = StandardMaterial({material.name!r})")
+            emitter.add(f"{material_var}.metallic = 0.0")
+            emitter.add(f"{material_var}.roughness = {format_number(math.sqrt(get_scalar_roughness(params)))}")
         if "reflectance" in params and params["reflectance"].kind == "texture":
             texture_name = get_string(params, "reflectance")
             texture = textures.get(texture_name)
@@ -672,23 +770,69 @@ def emit_material(
             emitter.add(
                 f"{material_var}.baseColor = {format_float4(get_rgb(params, 'reflectance', [0.5, 0.5, 0.5], source_path, material.line) + [1.0])}"
             )
-        emitter.add(f"{material_var}.roughness = {format_float2(get_roughness_pair(params))}")
         emitter.add(f"{material_var}.doubleSided = True")
     elif material_type == "conductor":
-        emitter.add(f"{material_var} = PBRTConductorMaterial({material.name!r})")
         if "reflectance" in params:
             eta, k = reflectance_to_eta_k(get_rgb(params, "reflectance", [0.5, 0.5, 0.5], source_path, material.line))
         else:
             eta = get_rgb(params, "eta", [1.65746, 0.880369, 0.521229], source_path, material.line)
             k = get_rgb(params, "k", [9.223869, 6.269523, 4.837001], source_path, material.line)
-        emitter.add(f"{material_var}.baseColor = {format_float4(eta + [1.0])}")
-        emitter.add(f"{material_var}.transmissionColor = {format_float3(k)}")
-        emitter.add(f"{material_var}.roughness = {format_float2(get_roughness_pair(params))}")
+        if use_pbrt_materials:
+            emitter.add(f"{material_var} = PBRTConductorMaterial({material.name!r})")
+            emitter.add(f"{material_var}.baseColor = {format_float4(eta + [1.0])}")
+            emitter.add(f"{material_var}.transmissionColor = {format_float3(k)}")
+            emitter.add(f"{material_var}.roughness = {format_float2(get_roughness_pair(params))}")
+        else:
+            emitter.add(f"{material_var} = StandardMaterial({material.name!r})")
+            emitter.add(f"{material_var}.baseColor = {format_float4(conductor_specular_albedo(params, source_path, material.line) + [1.0])}")
+            emitter.add(f"{material_var}.metallic = 1.0")
+            emitter.add(f"{material_var}.roughness = {format_number(math.sqrt(get_scalar_roughness(params)))}")
         emitter.add(f"{material_var}.doubleSided = True")
     elif material_type == "dielectric":
-        emitter.add(f"{material_var} = PBRTDielectricMaterial({material.name!r})")
-        emitter.add(f"{material_var}.indexOfRefraction = {format_number(get_float(params, 'eta', 1.5))}")
-        emitter.add(f"{material_var}.roughness = {format_float2(get_roughness_pair(params))}")
+        eta = get_scalar_eta(params, 1.5)
+        if use_pbrt_materials:
+            emitter.add(f"{material_var} = PBRTDielectricMaterial({material.name!r})")
+            emitter.add(f"{material_var}.indexOfRefraction = {format_number(eta)}")
+            emitter.add(f"{material_var}.roughness = {format_float2(get_roughness_pair(params))}")
+        else:
+            emitter.add(f"{material_var} = StandardMaterial({material.name!r})")
+            emitter.add(f"{material_var}.metallic = 0.0")
+            emitter.add(f"{material_var}.roughness = {format_number(math.sqrt(get_scalar_roughness(params)))}")
+            emitter.add(f"{material_var}.indexOfRefraction = {format_number(eta)}")
+            emitter.add(f"{material_var}.specularTransmission = 1.0")
+    elif material_type == "diffusetransmission":
+        if use_pbrt_materials:
+            emitter.add(f"{material_var} = PBRTDiffuseTransmissionMaterial({material.name!r})")
+        else:
+            emitter.add(f"{material_var} = StandardMaterial({material.name!r})")
+            emitter.add(f"{material_var}.metallic = 0.0")
+            emitter.add(f"{material_var}.roughness = 1.0")
+            emitter.add(f"{material_var}.diffuseTransmission = 0.5")
+        if "reflectance" in params and params["reflectance"].kind == "texture":
+            texture_name = get_string(params, "reflectance")
+            texture = textures.get(texture_name)
+            if texture is None:
+                fail(f"material '{material.name}' references unknown texture '{texture_name}'", source_path, params["reflectance"].line)
+            filename = resolve_asset_path(get_string(texture.params, "filename"), source_dir, output_dir)
+            emitter.add(f"{material_var}.loadTexture(MaterialTextureSlot.BaseColor, {filename!r})")
+        else:
+            emitter.add(
+                f"{material_var}.baseColor = {format_float4(get_rgb(params, 'reflectance', [0.25, 0.25, 0.25], source_path, material.line) + [1.0])}"
+            )
+
+        if "transmittance" in params and params["transmittance"].kind == "texture":
+            texture_name = get_string(params, "transmittance")
+            texture = textures.get(texture_name)
+            if texture is None:
+                fail(f"material '{material.name}' references unknown texture '{texture_name}'", source_path, params["transmittance"].line)
+            filename = resolve_asset_path(get_string(texture.params, "filename"), source_dir, output_dir)
+            emitter.add(f"{material_var}.loadTexture(MaterialTextureSlot.Transmission, {filename!r})")
+        else:
+            emitter.add(
+                f"{material_var}.transmissionColor = {format_float3(get_rgb(params, 'transmittance', [0.25, 0.25, 0.25], source_path, material.line))}"
+            )
+
+        emitter.add(f"{material_var}.doubleSided = True")
     else:
         fail(f"unsupported material type '{material_type}'", source_path, material.line)
 
@@ -750,7 +894,38 @@ def emit_trianglemesh_inline(emitter: Emitter, shape: ShapeDef, source_path: Pat
     return mesh_var
 
 
-def emit_scene(scene: SceneData, source_path: Path, output_path: Path) -> str:
+def emit_infinite_light(
+    emitter: Emitter,
+    light: InfiniteLightDef,
+    source_dir: Path,
+    output_dir: Path,
+    source_path: Path,
+) -> None:
+    filename = get_string(light.params, "filename")
+    scale = get_float(light.params, "scale", 1.0)
+    l_values = maybe_list(light.params.get("L"))
+
+    if filename and l_values:
+        fail("infinite light cannot specify both 'filename' and 'L'", source_path, light.line)
+    if l_values:
+        fail("constant infinite lights using 'L' are not supported by this converter", source_path, light.line)
+    if not filename:
+        fail("infinite light is missing 'filename'", source_path, light.line)
+
+    envmap_path = resolve_asset_path(filename, source_dir, output_dir)
+    envmap_var = emitter.unique("envMap")
+    emitter.add(f"{envmap_var} = EnvMap({envmap_path!r})")
+    if abs(scale - 1.0) > 1e-9:
+        emitter.add(f"{envmap_var}.intensity = {format_number(scale)}")
+
+    rotation = envmap_rotation_from_transform(light.transform)
+    if not is_close_vec(rotation, [0.0, 0.0, 0.0], eps=1e-4):
+        emitter.add(f"{envmap_var}.rotation = {format_float3(rotation)}")
+    emitter.add(f"sceneBuilder.envMap = {envmap_var}")
+    emitter.add()
+
+
+def emit_scene(scene: SceneData, source_path: Path, output_path: Path, use_pbrt_materials: bool) -> str:
     emitter = Emitter()
     source_dir = source_path.parent
     output_dir = output_path.parent
@@ -759,7 +934,8 @@ def emit_scene(scene: SceneData, source_path: Path, output_path: Path) -> str:
     emitter.add("# Auto-generated by scripts/pbrt2pyscene.py")
     emitter.add(f"# Source: {source_path.as_posix()}")
     emitter.add("# Supported subset: Transform / Camera / Texture(imagemap) / MakeNamedMaterial /")
-    emitter.add("# NamedMaterial / AreaLightSource(diffuse) / Shape(plymesh, trianglemesh)")
+    emitter.add("# NamedMaterial / AreaLightSource(diffuse) / LightSource(infinite) /")
+    emitter.add("# Shape(plymesh, trianglemesh)")
     emitter.add("############################################################################")
     emitter.add()
 
@@ -796,10 +972,15 @@ def emit_scene(scene: SceneData, source_path: Path, output_path: Path) -> str:
     emitter.add("sceneBuilder.addCamera(camera)")
     emitter.add()
 
+    if scene.infinite_lights:
+        if len(scene.infinite_lights) > 1:
+            emitter.add(f"# Warning: {len(scene.infinite_lights)} infinite lights found; only the first is emitted.")
+        emit_infinite_light(emitter, scene.infinite_lights[0], source_dir, output_dir, source_path)
+
     material_vars: Dict[str, str] = {}
     for material_name in scene.materials:
         material_vars[material_name] = emit_material(
-            emitter, scene.materials[material_name], scene.textures, source_dir, output_dir, source_path
+            emitter, scene.materials[material_name], scene.textures, source_dir, output_dir, source_path, use_pbrt_materials
         )
         emitter.add()
 
@@ -831,9 +1012,17 @@ def emit_scene(scene: SceneData, source_path: Path, output_path: Path) -> str:
         node_name = get_string(shape.params, "filename", f"{shape.shape_type}_{shape.index}")
         node_name = Path(node_name).stem
 
-        emitter.add(f"{mesh_id_var} = sceneBuilder.addTriangleMesh({mesh_var}, {material_var})")
-        emitter.add(f"{node_id_var} = sceneBuilder.addNode({node_name!r}, {format_transform_expr(shape.transform)})")
-        emitter.add(f"sceneBuilder.addMeshInstance({node_id_var}, {mesh_id_var})")
+        if shape.shape_type == "plymesh":
+            emitter.add(f"if {mesh_var} is not None:")
+            emitter.add(f"    {mesh_id_var} = sceneBuilder.addTriangleMesh({mesh_var}, {material_var})")
+            emitter.add(f"    {node_id_var} = sceneBuilder.addNode({node_name!r}, {format_transform_expr(shape.transform)})")
+            emitter.add(f"    sceneBuilder.addMeshInstance({node_id_var}, {mesh_id_var})")
+            emitter.add("else:")
+            emitter.add(f"    print(\"Warning: Skipping mesh '{node_name}' because '{filename}' failed to load.\")")
+        else:
+            emitter.add(f"{mesh_id_var} = sceneBuilder.addTriangleMesh({mesh_var}, {material_var})")
+            emitter.add(f"{node_id_var} = sceneBuilder.addNode({node_name!r}, {format_transform_expr(shape.transform)})")
+            emitter.add(f"sceneBuilder.addMeshInstance({node_id_var}, {mesh_id_var})")
         emitter.add()
 
     return emitter.text()
@@ -844,6 +1033,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("input", type=Path, help="Input .pbrt file")
     parser.add_argument("-o", "--output", type=Path, help="Output .pyscene file")
     parser.add_argument("--force", action="store_true", help="Overwrite the output file if it already exists")
+    parser.add_argument(
+        "--use-pbrt-materials",
+        action="store_true",
+        help="Emit supported materials as PBRT*Material instead of converting them to StandardMaterial",
+    )
     return parser
 
 
@@ -865,7 +1059,7 @@ def main() -> int:
         fail(f"output file already exists: {output_path} (pass --force to overwrite)")
 
     scene = parse_scene(input_path)
-    output_text = emit_scene(scene, input_path, output_path)
+    output_text = emit_scene(scene, input_path, output_path, args.use_pbrt_materials)
     output_path.write_text(output_text, encoding="utf-8")
     print(f"Wrote {output_path}")
     return 0

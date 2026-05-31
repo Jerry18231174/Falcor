@@ -149,14 +149,22 @@ struct ConeTrace
         // 0.24917441606521606,    0.22726285457611084,    0.20798613131046295,    0.19096757471561432,
         // 0.17588791251182556,    0.16247735917568207,    0.15050818026065826,    0.13978791236877441,
         // 0.13015364110469818,    0.12146709859371185,    0.11361058801412582,    0.10648360103368759
-        1.0,                    0.9999957084655762,     0.9999313354492188,     0.9996525645256042,
-        0.9989031553268433,     0.997328519821167,      0.9944841265678406,     0.9898526072502136,
-        0.9828721880912781,     0.9729792475700378,     0.959663450717926,      0.942530632019043,
-        0.9213641881942749,     0.8961706757545471,     0.8671989440917969,     0.8349241614341736,
-        0.800000011920929,      0.763188362121582,      0.7252823114395142,     0.6870371699333191,
-        0.6491192579269409,     0.6120767593383789,     0.5763295888900757,     0.5421751141548157,
-        0.5098024010658264,     0.4793111979961395,     0.45073145627975464,    0.4240412712097168,
-        0.39918220043182373,    0.37607163190841675,    0.35461246967315674,    0.3347001373767853
+        // 1.0,                    0.9999957084655762,     0.9999313354492188,     0.9996525645256042,
+        // 0.9989031553268433,     0.997328519821167,      0.9944841265678406,     0.9898526072502136,
+        // 0.9828721880912781,     0.9729792475700378,     0.959663450717926,      0.942530632019043,
+        // 0.9213641881942749,     0.8961706757545471,     0.8671989440917969,     0.8349241614341736,
+        // 0.800000011920929,      0.763188362121582,      0.7252823114395142,     0.6870371699333191,
+        // 0.6491192579269409,     0.6120767593383789,     0.5763295888900757,     0.5421751141548157,
+        // 0.5098024010658264,     0.4793111979961395,     0.45073145627975464,    0.4240412712097168,
+        // 0.39918220043182373,    0.37607163190841675,    0.35461246967315674,    0.3347001373767853
+        1.0,                    0.9999980926513672,     0.999969482421875,      0.999845564365387,
+        0.9995120763778687,     0.9988100528717041,     0.9975371956825256,     0.9954516887664795,
+        0.9922778606414795,     0.987716019153595,      0.9814554452896118,     0.9731923341751099,
+        0.9626509547233582,     0.9496065974235535,     0.9339085817337036,     0.9154995083808899,
+        0.8944271802902222,     0.8708478212356567,     0.8450179696083069,     0.8172774314880371,
+        0.788024365901947,      0.757687509059906,      0.7266981601715088,     0.6954666972160339,
+        0.6643638610839844,     0.6337094902992249,     0.6037668585777283,     0.5747423768043518,
+        0.5467888712882996,     0.5200113654136658,     0.494473934173584,      0.4702068567276001
     };
 
     uint batchSize = 0;
@@ -165,9 +173,14 @@ struct ConeTrace
     uint specSize = 0;
     uint enableTemporalHistory = 0;
     uint useTemporalReuse = 0;
+    uint coneTraceReuseMode = 1;
 
     float3 bboxMin;
     float3 bboxMax;
+
+    static const uint kConeTraceReuseModeTemporalMerge = 0;
+    static const uint kConeTraceReuseModeTemporalToHistory = 1;
+    static const uint kConeTraceReuseModeScreenSpaceDenoise = 2;
 
     void sortClusters(const uint threadIdx)
     {
@@ -403,30 +416,8 @@ struct ConeTrace
         GroupMemoryBarrierWithGroupSync();
     }
 
-    void clusterToHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
+    void mergeCurrentClustersWithHistory(const uint pixIdx, const uint threadIdx)
     {
-        if (threadIdx < numClusters)
-        {
-            TemporalSpecHistory history = temporalHistory[pixIdx];
-            gsCenters[threadIdx] = history.mean[threadIdx];
-            gsHistoryActive[threadIdx] = history.count[threadIdx] > 0.0f ? 1u : 0u;
-        }
-        GroupMemoryBarrierWithGroupSync();
-
-        if (!hasActiveHistoryClusters())
-        {
-            kMeansInt(threadIdx, rayT, valid);
-            return;
-        }
-
-        if (hasEmptyHistoryClusters())
-        {
-            seedEmptyHistoryClusters(threadIdx, rayT, valid);
-            refineEmptyHistoryClusters(threadIdx, rayT, valid);
-        }
-
-        computeCurrentClusterStats(threadIdx, rayT, valid);
-
         if (threadIdx == 0)
         {
             const float kMaxTemporalCount = 102400.0f;
@@ -436,7 +427,7 @@ struct ConeTrace
             for (uint k = 0; k < numClusters; ++k)
             {
                 const float curCount = (float) gsCounts[k];
-                const float curMean = gsNewCenters[k];
+                const float curMean = gsCenters[k];
                 const float curM2 = gsVars[k];
                 const float prevCount = min(history.count[k], kMaxTemporalCount);
                 const float prevMean = history.mean[k];
@@ -454,7 +445,7 @@ struct ConeTrace
                         const float mergedCount = prevCount + curCount;
                         const float delta = curMean - prevMean;
                         const float mergedMean = (prevMean * prevCount + curMean * curCount) / mergedCount;
-                        const float mergedM2 = prevM2 + curM2 + delta * delta * prevCount * curCount / mergedCount;
+                        const float mergedM2 = prevM2 + curM2; // + delta * delta * prevCount * curCount / mergedCount;
                         const float countScale = min(kMaxTemporalCount / mergedCount, 1.0f);
 
                         outCount = mergedCount * countScale;
@@ -482,6 +473,46 @@ struct ConeTrace
         }
 
         GroupMemoryBarrierWithGroupSync();
+    }
+
+    void clusterToHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
+    {
+        if (threadIdx < numClusters)
+        {
+            TemporalSpecHistory history = temporalHistory[pixIdx];
+            gsCenters[threadIdx] = history.mean[threadIdx];
+            gsHistoryActive[threadIdx] = history.count[threadIdx] > 0.0f ? 1u : 0u;
+        }
+        GroupMemoryBarrierWithGroupSync();
+
+        if (!hasActiveHistoryClusters())
+        {
+            kMeansInt(threadIdx, rayT, valid);
+            return;
+        }
+
+        if (hasEmptyHistoryClusters())
+        {
+            seedEmptyHistoryClusters(threadIdx, rayT, valid);
+            refineEmptyHistoryClusters(threadIdx, rayT, valid);
+        }
+
+        computeCurrentClusterStats(threadIdx, rayT, valid);
+
+        if (threadIdx < numClusters)
+        {
+            gsCenters[threadIdx] = gsNewCenters[threadIdx];
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+        mergeCurrentClustersWithHistory(pixIdx, threadIdx);
+    }
+
+    void clusterCurrentThenMergeHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
+    {
+        kMeansInt(threadIdx, rayT, valid);
+        sortClusters(threadIdx);
+        mergeCurrentClustersWithHistory(pixIdx, threadIdx);
     }
 
     void accumulateTemporal(const uint pixIdx, const uint threadIdx)
@@ -819,7 +850,15 @@ struct ConeTrace
         bool valid = traceRandomDepth(pixIdx, threadIdx, rayT);
 
         if (enableTemporalHistory != 0 && useTemporalReuse != 0)
-            clusterToHistory(pixIdx, threadIdx, rayT, valid);
+        {
+            if (coneTraceReuseMode == kConeTraceReuseModeTemporalMerge)
+                clusterCurrentThenMergeHistory(pixIdx, threadIdx, rayT, valid);
+            else if (coneTraceReuseMode == kConeTraceReuseModeTemporalToHistory)
+                clusterToHistory(pixIdx, threadIdx, rayT, valid);
+            else
+                // Placeholder until a dedicated screen-space denoise path is implemented.
+                clusterToHistory(pixIdx, threadIdx, rayT, valid);
+        }
         else
             kMeansInt(threadIdx, rayT, valid);
         accumulateTemporal(pixIdx, threadIdx);

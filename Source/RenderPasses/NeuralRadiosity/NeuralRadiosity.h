@@ -248,6 +248,23 @@ FALCOR_ENUM_INFO(
 );
 FALCOR_ENUM_REGISTER(RenderMode);
 
+enum class ConeTraceReuseMode
+{
+    TemporalMerge,
+    TemporalToHistory,
+    ScreenSpaceDenoise,
+};
+
+FALCOR_ENUM_INFO(
+    ConeTraceReuseMode,
+    {
+        {ConeTraceReuseMode::TemporalMerge, "Temporal Merge"},
+        {ConeTraceReuseMode::TemporalToHistory, "Temporal To History"},
+        {ConeTraceReuseMode::ScreenSpaceDenoise, "Screen Space Denoise"},
+    }
+);
+FALCOR_ENUM_REGISTER(ConeTraceReuseMode);
+
 
 class NeuralRadiosity : public RenderPass
 {
@@ -331,6 +348,8 @@ private:
     float mSpecularRoughnessThreshold = 0.5f;
     /// Enable temporal reuse for render-batch specular cone tracing.
     bool mEnableRenderSpecTemporalReuse = true;
+    /// Strategy for integrating the current frame's depth samples with temporal specular clusters.
+    ConeTraceReuseMode mConeTraceReuseMode = ConeTraceReuseMode::TemporalToHistory;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
