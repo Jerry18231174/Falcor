@@ -72,6 +72,9 @@ struct SampleRHS
     uint batchCount = 0;
 
     bool useNEE = false;
+    bool useEmissiveLights = false;
+    bool useAnalyticLights = false;
+    bool useEnvLights = false;
     EmissiveLightSampler emissiveSampler;
 
     void generatePath(const uint idx, out PathState path)
@@ -137,8 +140,31 @@ struct SampleRHS
         bool neeValid = false;
         if (valid && useNEE)
         {
-            neeValid = generateEmissiveSample(emissiveSampler, lSd, true, path.sg, ls);
-            neeValid &= sceneRayQuery.traceVisibilityRay(ls.getVisibilityRay(), kRayFlags);
+            uint lightType;
+            float selectionPdf;
+            if (!selectLightType(lightType, selectionPdf, path.sg, useEmissiveLights, useAnalyticLights, useEnvLights))
+            {
+                neeValid = false;
+            }
+            else if (lightType == (uint)LightType::Analytic)
+            {
+                // Sample analytic light.
+                neeValid = generateAnalyticLightSample(lSd, path.sg, ls);
+                ls.lightType = (uint)LightType::Analytic;
+            }
+            else if (lightType == (uint)LightType::Emissive)
+            {
+                // Sample emissive light.
+                neeValid = generateEmissiveSample(emissiveSampler, lSd, true, path.sg, ls);
+                ls.lightType = (uint)LightType::Emissive;
+            }
+            
+            if (neeValid)
+            {
+                ls.pdf *= selectionPdf;
+                ls.Li /= selectionPdf;
+                neeValid &= sceneRayQuery.traceVisibilityRay(ls.getVisibilityRay(), kRayFlags);
+            }
         }
 
         // Sample BSDF.
@@ -191,7 +217,7 @@ struct SampleRHS
                 path.dir = ray.dir;
 
                 // NEE pdf for BSDF sample.
-                if (i == 0)
+                if ((i == 0) && (ls.lightType == (uint)LightType::Emissive))
                 {
                     pEdB = emissiveSampler.evalPdf(lSd.posW, lSd.getOrientedFaceNormal(), true, getTriangleLightHit(hit, sd));
                 }
@@ -247,7 +273,7 @@ struct SampleRHS
         }
 
         // MIS evaluation
-        float misNEE = neeValid ? (ls.pdf / (ls.pdf + pBdE)) : 0.f;
+        float misNEE = neeValid ? ((ls.lightType == (uint)LightType::Analytic) ? 1.0f : (ls.pdf / (ls.pdf + pBdE))) : 0.f;
         float misBSDF = bsdfValid ? (bs.pdf / (bs.pdf + pEdB)) : 0.f;
 
         // Active mask

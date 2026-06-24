@@ -23,6 +23,7 @@ RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
+RWStructuredBuffer<uint2> specPixel;
 
 
 struct CompactPass
@@ -57,6 +58,7 @@ struct CompactPass
         {
             const uint specIdx = specIndex[pixIdx];
             specVBuffer[specIdx] = gVBuffer[pixel];
+            specPixel[specIdx] = pixel;
             writeSpecInputGBuffer(
                 specInput, specIdx,
                 gPos[pixel].xyz,

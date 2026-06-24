@@ -21,6 +21,7 @@ RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
+RWStructuredBuffer<uint2> specPixel;
 
 
 struct CompactBatch
@@ -54,6 +55,7 @@ struct CompactBatch
         {
             const uint specIdx = specIndex[idx];
             specVBuffer[specIdx] = allVBuffer[idx];
+            specPixel[specIdx] = uint2(idx & 0xFFFu, idx >> 12);
             writeSpecInputGBuffer(
                 specInput, specIdx,
                 allPos[idx].xyz,

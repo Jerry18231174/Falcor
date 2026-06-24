@@ -31,6 +31,7 @@ import Scene.Material.ShadingUtils;
 import Rendering.Materials.TexLODHelpers;
 import Rendering.Lights.EmissiveLightSampler;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
+import Rendering.Lights.LightHelpers;
 import Utils.Math.MathHelpers;
 import Utils.Geometry.GeometryHelpers;
 import PathState;
@@ -216,6 +217,15 @@ bool generateScatterRay(
 }
 
 
+/** Types of samplable lights.
+*/
+enum class LightType
+{
+    EnvMap,
+    Emissive,
+    Analytic
+};
+
 /** Describes a light sample.
 */
 struct LightSample
@@ -229,6 +239,49 @@ struct LightSample
 
     Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance); }
 };
+
+/** Select a light type for sampling.
+    \param[out] lightType Selected light type.
+    \param[out] pdf Probability for selected type.
+    \param[in,out] sg Sample generator.
+    \return Return true if selection is valid.
+*/
+bool selectLightType(
+    out uint lightType, out float pdf, inout SampleGenerator sg,
+    bool useEmissiveLights, bool useAnalyticLights, bool useEnvLight)
+{
+    float p[3];
+    p[0] = useEnvLight ? 1.f : 0.f;
+    p[1] = useEmissiveLights ? 1.f : 0.f;
+    p[2] = useAnalyticLights ? 1.f : 0.f;
+
+    // Normalize probabilities. Early out if zero.
+    float sum = p[0] + p[1] + p[2];
+    if (sum == 0.f) return false;
+
+    float invSum = 1.f / sum;
+    p[0] *= invSum;
+    p[1] *= invSum;
+    p[2] *= invSum;
+
+    float u = sampleNext1D(sg);
+
+    [unroll]
+    for (lightType = 0; lightType < 3; ++lightType)
+    {
+        if (u < p[lightType])
+        {
+            pdf = p[lightType];
+            return true;
+        }
+        u -= p[lightType];
+    }
+
+    lightType = {};
+    pdf = {};
+
+    return false;
+}
 
 /** Generates a light sample on the emissive geometry.
     \param[in] emissiveSampler Emissive light sampler.
@@ -259,6 +312,43 @@ bool generateEmissiveSample(
     float3 toLight = lightPos - ls.origin;
     ls.distance = length(toLight);
     ls.dir = normalize(toLight);
+
+    return any(ls.Li > 0.f);
+}
+
+/** Generates a light sample on the analytic lights.
+    \param[in] vertex Path vertex.
+    \param[in,out] sg Sample generator.
+    \param[out] ls Struct describing valid samples.
+    \return True if the sample is valid and has nonzero contribution, false otherwise.
+*/
+bool generateAnalyticLightSample(
+    const ShadingData sd,
+    inout SampleGenerator sg,
+    out LightSample ls)
+{
+    ls = {}; // Default initialization to avoid divergence at returns.
+
+    uint lightCount = gScene.getLightCount();
+    if (lightCount == 0) return false;
+
+    // Sample analytic light source selected uniformly from the light list.
+    // TODO: Sample based on estimated contributions as pdf.
+    uint lightIndex = min(uint(sampleNext1D(sg) * lightCount), lightCount - 1);
+
+    // Sample local light source.
+    AnalyticLightSample lightSample;
+    if (!sampleLight(sd.posW, gScene.getLight(lightIndex), sg, lightSample)) return false;
+
+    // Setup returned sample.
+    ls.pdf = lightSample.pdf / lightCount;
+    ls.Li = lightSample.Li * lightCount;
+    // Offset shading position to avoid self-intersection.
+    ls.origin = sd.computeRayOrigin();
+    // Analytic lights do not currently have a geometric representation in the scene.
+    // Do not worry about adjusting the ray length to avoid self-intersections at the light.
+    ls.distance = lightSample.distance;
+    ls.dir = lightSample.dir;
 
     return any(ls.Li > 0.f);
 }

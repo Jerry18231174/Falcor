@@ -66,6 +66,7 @@ struct RayBatchBuffer
     ref<Buffer> diffColor;
     /// Specular buffer
     ref<Buffer> specVBuffer;
+    ref<Buffer> specPixel;
     ref<Buffer> specActive;       // Compaction Input
     ref<Buffer> specIndex;        // Compaction Output
     ref<Buffer> specInput;        // Specular input for neural network
@@ -179,6 +180,12 @@ struct RayBatchBuffer
         {
             specVBuffer = pDevice->createStructuredBuffer(
                 var["specVBuffer"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
+            specPixel = pDevice->createStructuredBuffer(
+                var["specPixel"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
                 MemoryType::DeviceLocal,
                 nullptr, false

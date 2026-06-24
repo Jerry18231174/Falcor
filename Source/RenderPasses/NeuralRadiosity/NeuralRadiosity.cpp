@@ -418,6 +418,7 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     var["specIndex"] = mpRenderBatch->specIndex;
     var["specInput"] = mpRenderBatch->specInput;
     var["specVBuffer"] = mpRenderBatch->specVBuffer;
+    var["specPixel"] = mpRenderBatch->specPixel;
 
     mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
 }
@@ -503,14 +504,17 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
         var["rhsSpecIndex"] = mpTrainRHSBatch->specIndex;
     }
 
+    var[name]["useNEE"] = false;
     if (mpEmissiveSampler)
     {
         var[name]["useNEE"] = mUseNEE;
         mpEmissiveSampler->bindShaderData(var[name]["emissiveSampler"]);
+        var[name]["useEmissiveLights"] = true;
     }
-    else
+    if (mpScene->getLightCount() > 0)
     {
-        var[name]["useNEE"] = false;
+        var[name]["useNEE"] = mUseNEE;
+        var[name]["useAnalyticLights"] = true;
     }
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
@@ -581,6 +585,7 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
     var[name]["bboxMin"] = aabb.minPoint;
     var[name]["bboxMax"] = aabb.maxPoint;
 
+    var["specPixel"] = pRayBatch->specPixel;
     var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specInput"] = pRayBatch->specInput;
     var["temporalHistory"] = mpRenderSpecTemporalHistory;
@@ -938,6 +943,7 @@ void NeuralRadiosity::bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchB
     var["specInput"] = pRayBatch->specInput;
     var["specColor"] = pRayBatch->specColor;
     var["specVBuffer"] = pRayBatch->specVBuffer;
+    var["specPixel"] = pRayBatch->specPixel;
 }
 
 DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const

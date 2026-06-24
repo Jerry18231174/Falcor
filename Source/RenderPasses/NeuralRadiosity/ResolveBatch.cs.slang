@@ -21,6 +21,7 @@ RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
+RWStructuredBuffer<uint2> specPixel;
 
 
 #ifndef RAY_FLAGS
