@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <memory>
+#include "Model.h"
 
 #ifndef MAX_LEVELS
 #define MAX_LEVELS 8
@@ -36,8 +38,8 @@ namespace HashGrid {
 
     void launchForward(
         cudaStream_t stream,
-        const float* grids,
-        float* input,
+        const precision_t* grids,
+        precision_t* input,
         uint32_t count,
         uint32_t fullDim,
         uint32_t encOffset,
@@ -47,10 +49,10 @@ namespace HashGrid {
 
     void launchBackward(
         cudaStream_t stream,
-        const float* grids,
-        const float* input,
-        const float* dL_dinput,
-        float* dL_dgrids,
+        const precision_t* grids,
+        const precision_t* input,
+        const precision_t* dL_dinput,
+        precision_t* dL_dgrids,
         uint32_t count,
         uint32_t fullDim,
         uint32_t encOffset,

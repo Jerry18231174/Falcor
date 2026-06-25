@@ -835,19 +835,20 @@ struct ConeTrace
         float rayT = 0.0f;
         bool valid = traceRandomDepth(pixIdx, threadIdx, rayT);
 
-        if (enableTemporalHistory != 0 && useTemporalReuse != 0)
-        {
-            if (coneTraceReuseMode == kConeTraceReuseModeTemporalMerge)
-                clusterCurrentThenMergeHistory(pixIdx, threadIdx, rayT, valid);
-            else if (coneTraceReuseMode == kConeTraceReuseModeTemporalToHistory)
-                clusterToHistory(pixIdx, threadIdx, rayT, valid);
-            else
-                // Placeholder until a dedicated screen-space denoise path is implemented.
-                clusterToHistory(pixIdx, threadIdx, rayT, valid);
-        }
-        else
-            kMeansInt(threadIdx, rayT, valid);
-        accumulateTemporal(pixIdx, threadIdx);
+        // if (enableTemporalHistory != 0 && useTemporalReuse != 0)
+        // {
+        //     if (coneTraceReuseMode == kConeTraceReuseModeTemporalMerge)
+        //         clusterCurrentThenMergeHistory(pixIdx, threadIdx, rayT, valid);
+        //     else if (coneTraceReuseMode == kConeTraceReuseModeTemporalToHistory)
+        //         clusterToHistory(pixIdx, threadIdx, rayT, valid);
+        //     else
+        //         // Placeholder until a dedicated screen-space denoise path is implemented.
+        //         clusterToHistory(pixIdx, threadIdx, rayT, valid);
+        // }
+        // else
+        //     kMeansInt(threadIdx, rayT, valid);
+        // accumulateTemporal(pixIdx, threadIdx);
+        kMeansInt(threadIdx, rayT, valid);
 
         // Write output
         writeOutput(pixIdx, threadIdx);

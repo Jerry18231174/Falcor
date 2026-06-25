@@ -8,8 +8,20 @@ namespace tcnn {
 
 namespace {
 
+template<typename SrcT, typename DstT>
+void castMatrix(cudaStream_t stream, const GPUMatrixDynamic<SrcT>& src, GPUMatrixDynamic<DstT>& dst) {
+    CHECK_THROW(src.m() == dst.m());
+    CHECK_THROW(src.n() == dst.n());
+
+    const uint32_t count = src.n_elements();
+    parallel_for_gpu(stream, count, [srcData = src.data(), dstData = dst.data()] __device__ (size_t i) {
+        dstData[i] = (DstT)srcData[i];
+    });
+}
+
+template<typename T>
 __global__ void clampGradients(
-    float* gradients,
+    T* gradients,
     uint32_t count,
     float threshold
 ) {
@@ -18,13 +30,13 @@ __global__ void clampGradients(
         return;
     }
 
-    float g = gradients[idx];
+    float g = (float)gradients[idx];
     if (!isfinite(g)) {
-        gradients[idx] = 0.0f;
+        gradients[idx] = (T)0.0f;
         return;
     }
 
-    gradients[idx] = fminf(fmaxf(g, -threshold), threshold);
+    gradients[idx] = (T)fminf(fmaxf(g, -threshold), threshold);
 }
 
 } // namespace
@@ -58,7 +70,7 @@ NeuralConeModel<T>::NeuralConeModel(HashGrid::Config primGridConfig, HashGridInt
         {"n_neurons", 64},
         {"n_hidden_layers", 4}
     };
-    mpNet = std::shared_ptr<Network<float, float>>(create_network<float>(networkConfig));
+    mpNet = std::shared_ptr<Network<T, T>>(create_network<T>(networkConfig));
 
     {
         HashGrid::initializeConstants(mPrimGridConfig);
@@ -98,19 +110,19 @@ NeuralConeModel<T>::NeuralConeModel(HashGrid::Config primGridConfig, HashGridInt
 template<typename T>
 void NeuralConeModel<T>::inference_mixed_precision_impl(
     cudaStream_t stream,
-    const GPUMatrixDynamic<T>& input,
+    const GPUMatrixDynamic<float>& input,
     GPUMatrixDynamic<T>& output,
     bool use_inference_params
 ) {
-    static_assert(std::is_same<T, float>::value, "NeuralConeModel currently supports float inference only.");
-
     const uint32_t batchSize = input.n();
     CHECK_THROW(batchSize <= mMaxBatchSize);
+    GPUMatrix<T> networkInput{mInputDim, batchSize, stream};
+    castMatrix(stream, input, networkInput);
 
     HashGrid::launchForward(
         stream,
         mpPrimGridsInference,
-        input.data(),
+        networkInput.data(),
         batchSize,
         mInputDim,
         primEncOffset,
@@ -121,7 +133,7 @@ void NeuralConeModel<T>::inference_mixed_precision_impl(
     HashGridInterp::launchForward(
         stream,
         mpClsGridsInference,
-        input.data(),
+        networkInput.data(),
         batchSize,
         mInputDim,
         clsEncOffset,
@@ -131,29 +143,29 @@ void NeuralConeModel<T>::inference_mixed_precision_impl(
         mClsGridConfig
     );
 
-    mpNet->inference(stream, input, output, use_inference_params);
+    mpNet->inference_mixed_precision(stream, networkInput, output, use_inference_params);
 }
 
 template<typename T>
 std::unique_ptr<Context> NeuralConeModel<T>::forward_impl(
     cudaStream_t stream,
-    const GPUMatrixDynamic<T>& input,
+    const GPUMatrixDynamic<float>& input,
     GPUMatrixDynamic<T>* output,
     bool use_inference_params,
     bool prepare_input_gradients
 ) {
-    static_assert(std::is_same<T, float>::value, "NeuralConeModel currently supports float inference only.");
-
     const uint32_t batchSize = input.n();
     CHECK_THROW(batchSize <= mMaxBatchSize);
 
     auto ctx = std::make_unique<NeuralConeModelContext<T>>();
     ctx->batchSize = batchSize;
+    ctx->networkInput = GPUMatrix<T>{mInputDim, batchSize, stream};
+    castMatrix(stream, input, ctx->networkInput);
 
     HashGrid::launchForward(
         stream,
         mpPrimGrids,
-        input.data(),
+        ctx->networkInput.data(),
         batchSize,
         mInputDim,
         primEncOffset,
@@ -164,7 +176,7 @@ std::unique_ptr<Context> NeuralConeModel<T>::forward_impl(
     HashGridInterp::launchForward(
         stream,
         mpClsGrids,
-        input.data(),
+        ctx->networkInput.data(),
         batchSize,
         mInputDim,
         clsEncOffset,
@@ -174,7 +186,7 @@ std::unique_ptr<Context> NeuralConeModel<T>::forward_impl(
         mClsGridConfig
     );
 
-    ctx->netCtx = mpNet->forward(stream, input, output, use_inference_params, prepare_input_gradients);
+    ctx->netCtx = mpNet->forward(stream, ctx->networkInput, output, use_inference_params, prepare_input_gradients);
 
     return ctx;
 }
@@ -183,31 +195,30 @@ template<typename T>
 void NeuralConeModel<T>::backward_impl(
     cudaStream_t stream,
     const Context& ctx,
-    const GPUMatrixDynamic<T>& input,
+    const GPUMatrixDynamic<float>& input,
     const GPUMatrixDynamic<T>& output,
     const GPUMatrixDynamic<T>& dL_doutput,
-    GPUMatrixDynamic<T>* dL_dinput,
+    GPUMatrixDynamic<float>* dL_dinput,
     bool use_inference_params,
     GradientMode param_gradients_mode
 ) {
-    static_assert(std::is_same<T, float>::value, "NeuralConeModel currently supports float inference only.");
-
     const uint32_t batchSize = input.n();
     CHECK_THROW(batchSize <= mMaxBatchSize);
 
     const NeuralConeModelContext<T>& ncCtx = static_cast<const NeuralConeModelContext<T>&>(ctx);
+    GPUMatrixDynamic<T> dL_dnetwork_input{mInputDim, batchSize, stream};
     if (param_gradients_mode == GradientMode::Overwrite) {
         CUDA_CHECK_THROW(cudaMemsetAsync(mpPrimGridsGradient, 0, sizeof(T) * mPrimGridSize, stream));
         CUDA_CHECK_THROW(cudaMemsetAsync(mpClsGridsGradient, 0, sizeof(T) * mClsGridSize, stream));
     }
 
-    mpNet->backward(stream, *ncCtx.netCtx, input, output, dL_doutput, dL_dinput, use_inference_params, param_gradients_mode);
+    mpNet->backward(stream, *ncCtx.netCtx, ncCtx.networkInput, output, dL_doutput, &dL_dnetwork_input, use_inference_params, param_gradients_mode);
 
     HashGrid::launchBackward(
         stream,
         mpPrimGrids,
-        input.data(),
-        dL_dinput->data(),
+        ncCtx.networkInput.data(),
+        dL_dnetwork_input.data(),
         mpPrimGridsGradient,
         batchSize,
         mInputDim,
@@ -219,8 +230,8 @@ void NeuralConeModel<T>::backward_impl(
     HashGridInterp::launchBackward(
         stream,
         mpClsGrids,
-        input.data(),
-        dL_dinput->data(),
+        ncCtx.networkInput.data(),
+        dL_dnetwork_input.data(),
         mpClsGridsGradient,
         batchSize,
         mInputDim,
@@ -230,6 +241,10 @@ void NeuralConeModel<T>::backward_impl(
         clsWeightOffset,
         mClsGridConfig
     );
+
+    if (dL_dinput) {
+        castMatrix(stream, dL_dnetwork_input, *dL_dinput);
+    }
 
     // Clamp gradients to prevent training instability.
     {
@@ -285,7 +300,7 @@ void NeuralConeModel<T>::set_params_impl(T* params, T* inference_params, T* grad
 
 template<typename T>
 void NeuralConeModel<T>::initialize_params(pcg32& rnd, float* params_full_precision, float scale) {
-    CUDA_CHECK_THROW(cudaMemsetAsync(params_full_precision, 0, sizeof(T) * (mPrimGridSize + mClsGridSize)));
+    CUDA_CHECK_THROW(cudaMemsetAsync(params_full_precision, 0, sizeof(float) * (mPrimGridSize + mClsGridSize)));
     uint32_t netOffset = mPrimGridSize + mClsGridSize;
     mpNet->initialize_params(rnd, params_full_precision + netOffset, scale);
 }
@@ -300,7 +315,7 @@ std::vector<std::pair<uint32_t, uint32_t>> NeuralConeModel<T>::layer_sizes() con
     return {};
 }
 
-template class NeuralConeModel<float>;
+template class NeuralConeModel<precision_t>;
 
 
 }

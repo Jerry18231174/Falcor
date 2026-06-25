@@ -2,6 +2,20 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include "tiny-cuda-nn/object.h"
+
+
+#if defined(TCNN_HALF_PRECISION) && TCNN_HALF_PRECISION && defined(__CUDACC__)
+#include <cuda_fp16.h>
+#elif defined(TCNN_HALF_PRECISION) && TCNN_HALF_PRECISION
+struct __half;
+#endif
+
+#if defined(TCNN_HALF_PRECISION) && TCNN_HALF_PRECISION
+using precision_t = __half;
+#else
+using precision_t = float;
+#endif
 
 
 namespace tcnn
@@ -57,25 +71,28 @@ public:
     cudaStream_t stream() const { return mStream; }
 
 private:
-    std::shared_ptr<tcnn::NeuralModel<float>> mpDiffOfflineNet;
-    std::shared_ptr<tcnn::NeuralModel<float>> mpDiffOnlineNet;
-    std::shared_ptr<tcnn::NeuralConeModel<float>> mpSpecOfflineNet;
-    std::shared_ptr<tcnn::NeuralConeModel<float>> mpSpecOnlineNet;
-    tcnn::NeuralModel<float>* mpDiffNet = nullptr;
-    tcnn::NeuralConeModel<float>* mpSpecNet = nullptr;
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpDiffOfflineTrainer;
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpSpecOfflineTrainer;
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpDiffOnlineTrainer;
-    std::unique_ptr<tcnn::Trainer<float, float, float>> mpSpecOnlineTrainer;
-    tcnn::Trainer<float, float, float>* mpDiffTrainer = nullptr;
-    tcnn::Trainer<float, float, float>* mpSpecTrainer = nullptr;
+    void createOnlineModels();
+    void createOfflineModelsIfNeeded();
+
+    std::shared_ptr<tcnn::NeuralModel<precision_t>> mpDiffOfflineNet;
+    std::shared_ptr<tcnn::NeuralModel<precision_t>> mpDiffOnlineNet;
+    std::shared_ptr<tcnn::NeuralConeModel<precision_t>> mpSpecOfflineNet;
+    std::shared_ptr<tcnn::NeuralConeModel<precision_t>> mpSpecOnlineNet;
+    tcnn::NeuralModel<precision_t>* mpDiffNet = nullptr;
+    tcnn::NeuralConeModel<precision_t>* mpSpecNet = nullptr;
+    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpDiffOfflineTrainer;
+    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpSpecOfflineTrainer;
+    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpDiffOnlineTrainer;
+    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpSpecOnlineTrainer;
+    tcnn::Trainer<float, precision_t, precision_t>* mpDiffTrainer = nullptr;
+    tcnn::Trainer<float, precision_t, precision_t>* mpSpecTrainer = nullptr;
     cudaStream_t mStream;
     bool mOnline = false;
 
     std::shared_ptr<tcnn::GPUMemory<float>> mpdLdDiffInput;
     std::shared_ptr<tcnn::GPUMemory<float>> mpdLdSpecInput;
 
-    uint32_t pixelCount = 1u << 21;
+    uint32_t pixelCount = 1u << 20;
     uint32_t numClusters = 4;
 
     // Hyper parameters
@@ -91,6 +108,19 @@ private:
     uint32_t baseInterpResolution = 4;
     float perLevelInterpScale = 2.0f;
     float interpRatio = 0.5f;
+
+    const tcnn::json mOfflineOptConfig = {
+        {"otype", "Adam"},
+        {"learning_rate", 1e-2f}
+    };
+    const tcnn::json mOnlineOptConfig = {
+        {"otype", "EMA"},
+        {"decay", 0.9f},
+        {"nested", mOfflineOptConfig}
+    };
+    const tcnn::json mLossConfig = {
+        {"otype", "RelativeL2Luminance"}
+    };
 
     uint32_t mDiffInputDim = padUp(nFeaturesPerLevel * nLevels + 3 * 4 + 1, 16);
     uint32_t mSpecInputDim = padUp(nFeaturesPerLevel * nLevels + nInterpFeaturesPerLevel * numClusters + 3 * 4 + 1 + numClusters * (3 + 1 + 1), 16);

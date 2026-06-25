@@ -42,8 +42,8 @@ __device__ __forceinline__ uint32_t _hash_index(uint3 index, int level, uint32_t
 
 template<int N_FEATURES_PER_LEVEL>
 __global__ void forwardKernel(
-    const float* grids,
-    float* input,
+    const precision_t* grids,
+    precision_t* input,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
@@ -56,14 +56,14 @@ __global__ void forwardKernel(
     uint32_t clusterIdx = threadIdx.y;
     if (pixIdx >= count) return;
 
-    float* pixOut = input + pixIdx * fullDim + encOffset + clusterIdx * N_FEATURES_PER_LEVEL;
-    const float* posPtr = input + pixIdx * fullDim + posOffset + clusterIdx * 3;
-    const float* scalePtr = input + pixIdx * fullDim + scaleOffset + clusterIdx;
-    const float* weightPtr = input + pixIdx * fullDim + weightOffset + clusterIdx;
+    precision_t* pixOut = input + pixIdx * fullDim + encOffset + clusterIdx * N_FEATURES_PER_LEVEL;
+    const precision_t* posPtr = input + pixIdx * fullDim + posOffset + clusterIdx * 3;
+    const precision_t* scalePtr = input + pixIdx * fullDim + scaleOffset + clusterIdx;
+    const precision_t* weightPtr = input + pixIdx * fullDim + weightOffset + clusterIdx;
 
-    float3 pos3 = make_float3(posPtr[0], posPtr[1], posPtr[2]);
-    float scaleVal = scalePtr[0];
-    float clusterWeight = weightPtr[0];
+    float3 pos3 = make_float3((float)posPtr[0], (float)posPtr[1], (float)posPtr[2]);
+    float scaleVal = (float)scalePtr[0];
+    float clusterWeight = (float)weightPtr[0];
 
     // Get corresponding level and layer interpolation weight
     // Lower level means coarser, larger voxel size
@@ -116,8 +116,8 @@ __global__ void forwardKernel(
         }
     }
 
-    const float* upperGrid = grids + cGridOffsets[upperLevel] * N_FEATURES_PER_LEVEL;
-    const float* lowerGrid = grids + cGridOffsets[lowerLevel] * N_FEATURES_PER_LEVEL;
+    const precision_t* upperGrid = grids + cGridOffsets[upperLevel] * N_FEATURES_PER_LEVEL;
+    const precision_t* lowerGrid = grids + cGridOffsets[lowerLevel] * N_FEATURES_PER_LEVEL;
     
     uint32_t upperRes = cResolutions[upperLevel];
     uint32_t lowerRes = cResolutions[lowerLevel];
@@ -154,29 +154,29 @@ __global__ void forwardKernel(
                             (corner3.y ? lowerOffset.y : (1 - lowerOffset.y)) *
                             (corner3.z ? lowerOffset.z : (1 - lowerOffset.z));
         
-        const float* upperFeatures = upperGrid + upperIndex * N_FEATURES_PER_LEVEL;
-        const float* lowerFeatures = lowerGrid + lowerIndex * N_FEATURES_PER_LEVEL;
+        const precision_t* upperFeatures = upperGrid + upperIndex * N_FEATURES_PER_LEVEL;
+        const precision_t* lowerFeatures = lowerGrid + lowerIndex * N_FEATURES_PER_LEVEL;
 
         #pragma unroll
         for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
-            upperEntry[i] += upperFeatures[i] * upperCornerWeight;
-            lowerEntry[i] += lowerFeatures[i] * lowerCornerWeight;
+            upperEntry[i] += (float)upperFeatures[i] * upperCornerWeight;
+            lowerEntry[i] += (float)lowerFeatures[i] * lowerCornerWeight;
         }
     }
 
     // Write to output
     #pragma unroll
     for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
-        pixOut[i] = (lowerEntry[i] * lowerLayerWeight + upperEntry[i] * upperLayerWeight) * clusterWeight;
+        pixOut[i] = (precision_t)((lowerEntry[i] * lowerLayerWeight + upperEntry[i] * upperLayerWeight) * clusterWeight);
     }
 }
 
 template<int N_FEATURES_PER_LEVEL>
 __global__ void backwardKernel(
-    const float* grids,
-    const float* input,
-    const float* dL_dinput,
-    float* dL_dgrids,
+    const precision_t* grids,
+    const precision_t* input,
+    const precision_t* dL_dinput,
+    precision_t* dL_dgrids,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
@@ -189,14 +189,14 @@ __global__ void backwardKernel(
     uint32_t clusterIdx = threadIdx.y;
     if (pixIdx >= count) return;
 
-    const float* dL_dpixOut = dL_dinput + pixIdx * fullDim + encOffset + clusterIdx * N_FEATURES_PER_LEVEL;
-    const float* posPtr = input + pixIdx * fullDim + posOffset + clusterIdx * 3;
-    const float* scalePtr = input + pixIdx * fullDim + scaleOffset + clusterIdx;
-    const float* weightPtr = input + pixIdx * fullDim + weightOffset + clusterIdx;
+    const precision_t* dL_dpixOut = dL_dinput + pixIdx * fullDim + encOffset + clusterIdx * N_FEATURES_PER_LEVEL;
+    const precision_t* posPtr = input + pixIdx * fullDim + posOffset + clusterIdx * 3;
+    const precision_t* scalePtr = input + pixIdx * fullDim + scaleOffset + clusterIdx;
+    const precision_t* weightPtr = input + pixIdx * fullDim + weightOffset + clusterIdx;
 
-    float3 pos3 = make_float3(posPtr[0], posPtr[1], posPtr[2]);
-    float scaleVal = scalePtr[0];
-    float clusterWeight = weightPtr[0];
+    float3 pos3 = make_float3((float)posPtr[0], (float)posPtr[1], (float)posPtr[2]);
+    float scaleVal = (float)scalePtr[0];
+    float clusterWeight = (float)weightPtr[0];
 
     // Get corresponding level and layer interpolation weight
     // Lower level means coarser, larger voxel size
@@ -249,8 +249,8 @@ __global__ void backwardKernel(
         }
     }
 
-    float* dL_dupperGrid = dL_dgrids + cGridOffsets[upperLevel] * N_FEATURES_PER_LEVEL;
-    float* dL_dlowerGrid = dL_dgrids + cGridOffsets[lowerLevel] * N_FEATURES_PER_LEVEL;
+    precision_t* dL_dupperGrid = dL_dgrids + cGridOffsets[upperLevel] * N_FEATURES_PER_LEVEL;
+    precision_t* dL_dlowerGrid = dL_dgrids + cGridOffsets[lowerLevel] * N_FEATURES_PER_LEVEL;
     
     uint32_t upperRes = cResolutions[upperLevel];
     uint32_t lowerRes = cResolutions[lowerLevel];
@@ -267,8 +267,8 @@ __global__ void backwardKernel(
     float dL_dlowerEntry[MAX_FEATURES_PER_LEVEL];
     #pragma unroll
     for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
-        dL_dupperEntry[i] = dL_dpixOut[i] * upperLayerWeight * clusterWeight;
-        dL_dlowerEntry[i] = dL_dpixOut[i] * lowerLayerWeight * clusterWeight;
+        dL_dupperEntry[i] = (float)dL_dpixOut[i] * upperLayerWeight * clusterWeight;
+        dL_dlowerEntry[i] = (float)dL_dpixOut[i] * lowerLayerWeight * clusterWeight;
     }
 
     #pragma unroll
@@ -288,13 +288,13 @@ __global__ void backwardKernel(
                             (corner3.y ? lowerOffset.y : (1 - lowerOffset.y)) *
                             (corner3.z ? lowerOffset.z : (1 - lowerOffset.z));
         
-        float* dL_dupperFeatures = dL_dupperGrid + upperIndex * N_FEATURES_PER_LEVEL;
-        float* dL_dlowerFeatures = dL_dlowerGrid + lowerIndex * N_FEATURES_PER_LEVEL;
+        precision_t* dL_dupperFeatures = dL_dupperGrid + upperIndex * N_FEATURES_PER_LEVEL;
+        precision_t* dL_dlowerFeatures = dL_dlowerGrid + lowerIndex * N_FEATURES_PER_LEVEL;
 
         #pragma unroll
         for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
-            atomicAdd(&dL_dupperFeatures[i], dL_dupperEntry[i] * upperCornerWeight);
-            atomicAdd(&dL_dlowerFeatures[i], dL_dlowerEntry[i] * lowerCornerWeight);
+            atomicAdd(&dL_dupperFeatures[i], (precision_t)(dL_dupperEntry[i] * upperCornerWeight));
+            atomicAdd(&dL_dlowerFeatures[i], (precision_t)(dL_dlowerEntry[i] * lowerCornerWeight));
         }
     }
 }
@@ -333,8 +333,8 @@ void initializeConstants(const Config& config) {
 
 void launchForward(
     cudaStream_t stream,
-    const float* grids,
-    float* input,
+    const precision_t* grids,
+    precision_t* input,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
@@ -359,10 +359,10 @@ void launchForward(
 
 void launchBackward(
     cudaStream_t stream,
-    const float* grids,
-    const float* input,
-    const float* dL_dinput,
-    float* dL_dgrids,
+    const precision_t* grids,
+    const precision_t* input,
+    const precision_t* dL_dinput,
+    precision_t* dL_dgrids,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,

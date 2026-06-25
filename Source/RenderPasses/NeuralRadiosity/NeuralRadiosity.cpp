@@ -178,7 +178,7 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
         {
             setConeParameters(false);
         }
-        if (mpNRModel) mpNRModel->setOnline(mRenderMode == RenderMode::OnlineTrain);
+        if (mpNRModel) mpNRModel->setOnline(mRenderMode != RenderMode::Train);
     }
 
     if (widget.button("Load model state"))
@@ -608,26 +608,45 @@ void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::sha
     FALCOR_ASSERT(pRenderContext);
     FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA");
 
-    // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
-    pRenderContext->waitForFalcor(mpNRModel->stream());
+    {
+        FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA.waitForFalcor");
+        // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
+        pRenderContext->waitForFalcor(mpNRModel->stream());
+    }
 
-    mpNRModel->inference(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+    {
+        FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA.inference");
+        mpNRModel->inference(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+    }
 
-    // Synchronize CUDA->Falcor so following passes see CUDA writes.
-    pRenderContext->waitForCuda(mpNRModel->stream());
+    {
+        FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA.waitForCuda");
+        // Synchronize CUDA->Falcor so following passes see CUDA writes.
+        pRenderContext->waitForCuda(mpNRModel->stream());
+    }
 }
 
 void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
     FALCOR_ASSERT(pRenderContext);
+    FALCOR_PROFILE(pRenderContext, "modelTrainCUDA");
 
-    // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
-    pRenderContext->waitForFalcor(mpNRModel->stream());
+    {
+        FALCOR_PROFILE(pRenderContext, "modelTrainCUDA.waitForFalcor");
+        // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
+        pRenderContext->waitForFalcor(mpNRModel->stream());
+    }
 
-    mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+    {
+        FALCOR_PROFILE(pRenderContext, "modelTrainCUDA.train");
+        mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+    }
     
-    // Synchronize CUDA->Falcor so following passes see CUDA writes.
-    pRenderContext->waitForCuda(mpNRModel->stream());
+    {
+        FALCOR_PROFILE(pRenderContext, "modelTrainCUDA.waitForCuda");
+        // Synchronize CUDA->Falcor so following passes see CUDA writes.
+        pRenderContext->waitForCuda(mpNRModel->stream());
+    }
 }
 
 void NeuralRadiosity::updateFrameDim(const uint2 frameDim)

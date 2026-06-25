@@ -11,12 +11,12 @@ namespace tcnn {
 template <typename T>
 struct NeuralModelContext : public Context {
     uint32_t batchSize = 0;
-
+    GPUMatrix<T> networkInput;
     std::unique_ptr<Context> netCtx;
 };
 
 template <typename T>
-class NeuralModel : public DifferentiableObject<T, T, T> {
+class NeuralModel : public DifferentiableObject<float, T, T> {
 
 public:
     NeuralModel(HashGrid::Config gridConfig);
@@ -24,14 +24,14 @@ public:
 
     void inference_mixed_precision_impl(
         cudaStream_t stream,
-        const GPUMatrixDynamic<T>& input,
+        const GPUMatrixDynamic<float>& input,
         GPUMatrixDynamic<T>& output,
         bool use_inference_params = true
     ) override;
 
     std::unique_ptr<Context> forward_impl(
 		cudaStream_t stream,
-		const GPUMatrixDynamic<T>& input,
+		const GPUMatrixDynamic<float>& input,
 		GPUMatrixDynamic<T>* output = nullptr,
 		bool use_inference_params = false,
 		bool prepare_input_gradients = false
@@ -40,10 +40,10 @@ public:
     void backward_impl(
 		cudaStream_t stream,
 		const Context& ctx,
-		const GPUMatrixDynamic<T>& input,
+		const GPUMatrixDynamic<float>& input,
 		const GPUMatrixDynamic<T>& output,
 		const GPUMatrixDynamic<T>& dL_doutput,
-		GPUMatrixDynamic<T>* dL_dinput = nullptr,
+		GPUMatrixDynamic<float>* dL_dinput = nullptr,
 		bool use_inference_params = false,
 		GradientMode param_gradients_mode = GradientMode::Overwrite
 	) override;

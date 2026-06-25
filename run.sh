@@ -1,5 +1,5 @@
 #!/bin/bash
 LD_PRELOAD=/lib/x86_64-linux-gnu/libpng16.so.16 ./build/linux-gcc/bin/Release/Mogwai \
     --width 1280 --height 720 \
-    --script scripts/NeuralRadiosity.py \
+    --script scripts/OptixDenoiser.py \
     --scene media/scenes/living-room/scene-v4.pyscene

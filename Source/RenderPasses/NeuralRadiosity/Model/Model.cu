@@ -5,7 +5,6 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <nlohmann/json.hpp>
 #include "tiny-cuda-nn/config.h"
 #include "tiny-cuda-nn/loss.h"
 #include "tiny-cuda-nn/optimizer.h"
@@ -15,7 +14,7 @@
 // Model code
 
 namespace {
-    using Trainer = tcnn::Trainer<float, float, float>;
+    using Trainer = tcnn::Trainer<float, precision_t, precision_t>;
 
     void syncTrainerParams(const Trainer& src, Trainer& dst) {
         dst.set_params(src.params_inference(), src.n_params(), true);
@@ -24,6 +23,53 @@ namespace {
 
 NRModel::NRModel() {
     CUDA_CHECK_THROW(cudaStreamCreate(&mStream));
+
+    createOnlineModels();
+
+    mpdLdDiffInput = std::make_shared<tcnn::GPUMemory<float>>(mDiffInputDim * padUp(pixelCount, 256));
+    mpdLdSpecInput = std::make_shared<tcnn::GPUMemory<float>>(mSpecInputDim * padUp(pixelCount, 256));
+
+    mpDiffNet = mpDiffOnlineNet.get();
+    mpSpecNet = mpSpecOnlineNet.get();
+    mpDiffTrainer = mpDiffOnlineTrainer.get();
+    mpSpecTrainer = mpSpecOnlineTrainer.get();
+    mOnline = true;
+}
+
+void NRModel::createOnlineModels()
+{
+    HashGrid::Config gridConfig{nLevels, nFeaturesPerLevel, log2HashMapSize, baseResolution, perLevelScale};
+    HashGrid::Config primGridConfig{nLevels, nFeaturesPerLevel, log2HashMapSize, baseResolution, perLevelScale};
+    HashGridInterp::Config clsGridConfig{
+        numClusters,
+        nInterpLevels,
+        nInterpFeaturesPerLevel,
+        log2InterpHashMapSize,
+        baseInterpResolution,
+        perLevelInterpScale,
+        interpRatio
+    };
+
+    mpDiffOnlineNet = std::make_shared<tcnn::NeuralModel<precision_t>>(gridConfig);
+    {
+        auto onlineOptimizer = std::shared_ptr<tcnn::Optimizer<precision_t>>(tcnn::create_optimizer<precision_t>(mOnlineOptConfig));
+        auto onlineLoss = std::shared_ptr<tcnn::Loss<precision_t>>(tcnn::create_loss<precision_t>(mLossConfig));
+        mpDiffOnlineTrainer = std::make_unique<Trainer>(mpDiffOnlineNet, onlineOptimizer, onlineLoss);
+    }
+
+    mpSpecOnlineNet = std::make_shared<tcnn::NeuralConeModel<precision_t>>(primGridConfig, clsGridConfig);
+    {
+        auto onlineOptimizer = std::shared_ptr<tcnn::Optimizer<precision_t>>(tcnn::create_optimizer<precision_t>(mOnlineOptConfig));
+        auto onlineLoss = std::shared_ptr<tcnn::Loss<precision_t>>(tcnn::create_loss<precision_t>(mLossConfig));
+        mpSpecOnlineTrainer = std::make_unique<Trainer>(mpSpecOnlineNet, onlineOptimizer, onlineLoss);
+    }
+}
+
+void NRModel::createOfflineModelsIfNeeded()
+{
+    if (mpDiffOfflineNet && mpSpecOfflineNet && mpDiffOfflineTrainer && mpSpecOfflineTrainer) {
+        return;
+    }
 
     HashGrid::Config gridConfig{nLevels, nFeaturesPerLevel, log2HashMapSize, baseResolution, perLevelScale};
     HashGrid::Config primGridConfig{nLevels, nFeaturesPerLevel, log2HashMapSize, baseResolution, perLevelScale};
@@ -37,50 +83,19 @@ NRModel::NRModel() {
         interpRatio
     };
 
-    nlohmann::json offlineOptConfig = nlohmann::json({
-        {"otype", "Adam"},
-        {"learning_rate", 1e-2f}
-    });
-    nlohmann::json onlineOptConfig = nlohmann::json({
-        {"otype", "EMA"},
-        {"decay", 0.9f},
-        {"nested", offlineOptConfig}
-    });
-    nlohmann::json lossConfig = nlohmann::json({
-        {"otype", "RelativeL2Luminance"}
-    });
-
-    mpDiffOfflineNet = std::make_shared<tcnn::NeuralModel<float>>(gridConfig);
-    mpDiffOnlineNet = std::make_shared<tcnn::NeuralModel<float>>(gridConfig);
+    mpDiffOfflineNet = std::make_shared<tcnn::NeuralModel<precision_t>>(gridConfig);
     {
-        auto offlineOptimizer = std::shared_ptr<tcnn::Optimizer<float>>(tcnn::create_optimizer<float>(offlineOptConfig));
-        auto onlineOptimizer = std::shared_ptr<tcnn::Optimizer<float>>(tcnn::create_optimizer<float>(onlineOptConfig));
-        auto offlineLoss = std::shared_ptr<tcnn::Loss<float>>(tcnn::create_loss<float>(lossConfig));
-        auto onlineLoss = std::shared_ptr<tcnn::Loss<float>>(tcnn::create_loss<float>(lossConfig));
+        auto offlineOptimizer = std::shared_ptr<tcnn::Optimizer<precision_t>>(tcnn::create_optimizer<precision_t>(mOfflineOptConfig));
+        auto offlineLoss = std::shared_ptr<tcnn::Loss<precision_t>>(tcnn::create_loss<precision_t>(mLossConfig));
         mpDiffOfflineTrainer = std::make_unique<Trainer>(mpDiffOfflineNet, offlineOptimizer, offlineLoss);
-        mpDiffOnlineTrainer = std::make_unique<Trainer>(mpDiffOnlineNet, onlineOptimizer, onlineLoss);
     }
 
-    mpSpecOfflineNet = std::make_shared<tcnn::NeuralConeModel<float>>(primGridConfig, clsGridConfig);
-    mpSpecOnlineNet = std::make_shared<tcnn::NeuralConeModel<float>>(primGridConfig, clsGridConfig);
+    mpSpecOfflineNet = std::make_shared<tcnn::NeuralConeModel<precision_t>>(primGridConfig, clsGridConfig);
     {
-        auto offlineOptimizer = std::shared_ptr<tcnn::Optimizer<float>>(tcnn::create_optimizer<float>(offlineOptConfig));
-        auto onlineOptimizer = std::shared_ptr<tcnn::Optimizer<float>>(tcnn::create_optimizer<float>(onlineOptConfig));
-        auto offlineLoss = std::shared_ptr<tcnn::Loss<float>>(tcnn::create_loss<float>(lossConfig));
-        auto onlineLoss = std::shared_ptr<tcnn::Loss<float>>(tcnn::create_loss<float>(lossConfig));
+        auto offlineOptimizer = std::shared_ptr<tcnn::Optimizer<precision_t>>(tcnn::create_optimizer<precision_t>(mOfflineOptConfig));
+        auto offlineLoss = std::shared_ptr<tcnn::Loss<precision_t>>(tcnn::create_loss<precision_t>(mLossConfig));
         mpSpecOfflineTrainer = std::make_unique<Trainer>(mpSpecOfflineNet, offlineOptimizer, offlineLoss);
-        mpSpecOnlineTrainer = std::make_unique<Trainer>(mpSpecOnlineNet, onlineOptimizer, onlineLoss);
     }
-
-    mpdLdDiffInput = std::make_shared<tcnn::GPUMemory<float>>(mDiffInputDim * padUp(pixelCount, 256));
-    mpdLdSpecInput = std::make_shared<tcnn::GPUMemory<float>>(mSpecInputDim * padUp(pixelCount, 256));
-
-    mpDiffNet = mpDiffOfflineNet.get();
-    mpSpecNet = mpSpecOfflineNet.get();
-    mpDiffTrainer = mpDiffOfflineTrainer.get();
-    mpSpecTrainer = mpSpecOfflineTrainer.get();
-    syncTrainerParams(*mpDiffOfflineTrainer, *mpDiffOnlineTrainer);
-    syncTrainerParams(*mpSpecOfflineTrainer, *mpSpecOnlineTrainer);
 }
 
 NRModel::~NRModel() {
@@ -105,13 +120,13 @@ NRModel::~NRModel() {
 void NRModel::saveState(const std::string& path) {
     CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
 
-    nlohmann::json ckpt;
+    tcnn::json ckpt;
     ckpt["format"] = "nr_tcnn_ckpt_v1";
     ckpt["diff"] = mpDiffTrainer->serialize(true);
     ckpt["spec"] = mpSpecTrainer->serialize(true);
 
     std::ofstream ofs(path, std::ios::binary);
-    const std::vector<std::uint8_t> cbor = nlohmann::json::to_cbor(ckpt);
+    const std::vector<std::uint8_t> cbor = tcnn::json::to_cbor(ckpt);
     ofs.write(reinterpret_cast<const char*>(cbor.data()), static_cast<std::streamsize>(cbor.size()));
 }
 
@@ -120,7 +135,7 @@ void NRModel::loadState(const std::string& path) {
     if (!ifs) return;
 
     const std::vector<std::uint8_t> cbor((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-    nlohmann::json ckpt = nlohmann::json::from_cbor(cbor);
+    tcnn::json ckpt = tcnn::json::from_cbor(cbor);
     mpDiffTrainer->deserialize(ckpt.at("diff"));
     mpSpecTrainer->deserialize(ckpt.at("spec"));
 
@@ -141,6 +156,7 @@ void NRModel::setOnline(bool online)
         mpDiffTrainer = mpDiffOnlineTrainer.get();
         mpSpecTrainer = mpSpecOnlineTrainer.get();
     } else {
+        createOfflineModelsIfNeeded();
         syncTrainerParams(*mpDiffTrainer, *mpDiffOfflineTrainer);
         syncTrainerParams(*mpSpecTrainer, *mpSpecOfflineTrainer);
         mpDiffNet = mpDiffOfflineNet.get();

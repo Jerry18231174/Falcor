@@ -41,8 +41,8 @@ __device__ __forceinline__ uint32_t _hash_index(uint3 index, int level, uint32_t
 
 template<int N_FEATURES_PER_LEVEL>
 __global__ void forwardKernel(
-    const float* grids,
-    float* input,
+    const precision_t* grids,
+    precision_t* input,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
@@ -53,16 +53,16 @@ __global__ void forwardKernel(
     uint32_t level = threadIdx.y;
     if (pixIdx >= count) return;
     
-    float* levelOut = input + pixIdx * fullDim + encOffset + level * N_FEATURES_PER_LEVEL;
-    const float* posPtr = input + pixIdx * fullDim + posOffset;
+    precision_t* levelOut = input + pixIdx * fullDim + encOffset + level * N_FEATURES_PER_LEVEL;
+    const precision_t* posPtr = input + pixIdx * fullDim + posOffset;
 
-    float3 pos3 = make_float3(posPtr[0], posPtr[1], posPtr[2]);
+    float3 pos3 = make_float3((float)posPtr[0], (float)posPtr[1], (float)posPtr[2]);
 
     float entry[N_FEATURES_PER_LEVEL];
     #pragma unroll
     for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) { entry[i] = 0.0f; }
 
-    const float* grid = grids + cGridOffsets[level] * N_FEATURES_PER_LEVEL;
+    const precision_t* grid = grids + cGridOffsets[level] * N_FEATURES_PER_LEVEL;
     
     uint32_t res = cResolutions[level];
     
@@ -82,24 +82,24 @@ __global__ void forwardKernel(
                         (corner3.y ? offset.y : (1 - offset.y)) *
                         (corner3.z ? offset.z : (1 - offset.z));
         
-        const float* features = grid + index * N_FEATURES_PER_LEVEL;
+        const precision_t* features = grid + index * N_FEATURES_PER_LEVEL;
         #pragma unroll
         for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
-            entry[i] += features[i] * weight;
+            entry[i] += (float)features[i] * weight;
         }
     }
 
     // Write to output
     #pragma unroll
-    for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) { levelOut[i] = entry[i]; }
+    for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) { levelOut[i] = (precision_t)entry[i]; }
 }
 
 template<int N_FEATURES_PER_LEVEL>
 __global__ void backwardKernel(
-    const float* grids,
-    const float* input,
-    const float* dL_dinput,
-    float* dL_dgrids,
+    const precision_t* grids,
+    const precision_t* input,
+    const precision_t* dL_dinput,
+    precision_t* dL_dgrids,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
@@ -110,16 +110,16 @@ __global__ void backwardKernel(
     uint32_t level = threadIdx.y;
     if (pixIdx >= count) return;
 
-    const float* dL_dlevelOut = dL_dinput + pixIdx * fullDim + encOffset + level * N_FEATURES_PER_LEVEL;
-    const float* posPtr = input + pixIdx * fullDim + posOffset;
+    const precision_t* dL_dlevelOut = dL_dinput + pixIdx * fullDim + encOffset + level * N_FEATURES_PER_LEVEL;
+    const precision_t* posPtr = input + pixIdx * fullDim + posOffset;
 
-    float3 pos3 = make_float3(posPtr[0], posPtr[1], posPtr[2]);
+    float3 pos3 = make_float3((float)posPtr[0], (float)posPtr[1], (float)posPtr[2]);
 
     float dL_dentry[N_FEATURES_PER_LEVEL];
     #pragma unroll
-    for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) { dL_dentry[i] = dL_dlevelOut[i]; }
+    for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) { dL_dentry[i] = (float)dL_dlevelOut[i]; }
 
-    float* dL_dgrid = dL_dgrids + cGridOffsets[level] * N_FEATURES_PER_LEVEL;
+    precision_t* dL_dgrid = dL_dgrids + cGridOffsets[level] * N_FEATURES_PER_LEVEL;
     
     uint32_t res = cResolutions[level];
     
@@ -139,10 +139,10 @@ __global__ void backwardKernel(
                         (corner3.y ? offset.y : (1 - offset.y)) *
                         (corner3.z ? offset.z : (1 - offset.z));
 
-        float* dL_dfeatures = dL_dgrid + index * N_FEATURES_PER_LEVEL;
+        precision_t* dL_dfeatures = dL_dgrid + index * N_FEATURES_PER_LEVEL;
         #pragma unroll
         for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
-            atomicAdd(&dL_dfeatures[i], dL_dentry[i] * weight);
+            atomicAdd(&dL_dfeatures[i], (precision_t)(dL_dentry[i] * weight));
         }
     }
 }
@@ -177,8 +177,8 @@ void initializeConstants(const Config& config) {
 
 void launchForward(
     cudaStream_t stream,
-    const float* grids,
-    float* input,
+    const precision_t* grids,
+    precision_t* input,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
@@ -201,10 +201,10 @@ void launchForward(
 
 void launchBackward(
     cudaStream_t stream,
-    const float* grids,
-    const float* input,
-    const float* dL_dinput,
-    float* dL_dgrids,
+    const precision_t* grids,
+    const precision_t* input,
+    const precision_t* dL_dinput,
+    precision_t* dL_dgrids,
     uint32_t count,
     uint32_t fullDim,
     uint32_t encOffset,
