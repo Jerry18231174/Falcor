@@ -286,8 +286,8 @@ json NeuralConeModel<T>::hyperparams() const {
 template<typename T>
 void NeuralConeModel<T>::set_params_impl(T* params, T* inference_params, T* gradients) {
     uint32_t primGridsOffset = 0;
-    uint32_t clsGridOffset = primGridsOffset + mPrimGridSize;
-    uint32_t netOffset = clsGridOffset + mClsGridSize;
+    uint32_t clsGridOffset = primGridsOffset + padUp(mPrimGridSize, 16);
+    uint32_t netOffset = clsGridOffset + padUp(mClsGridSize, 16);
 
     mpPrimGrids = params + primGridsOffset;
     mpPrimGridsInference = inference_params + primGridsOffset;
@@ -300,14 +300,14 @@ void NeuralConeModel<T>::set_params_impl(T* params, T* inference_params, T* grad
 
 template<typename T>
 void NeuralConeModel<T>::initialize_params(pcg32& rnd, float* params_full_precision, float scale) {
-    CUDA_CHECK_THROW(cudaMemsetAsync(params_full_precision, 0, sizeof(float) * (mPrimGridSize + mClsGridSize)));
-    uint32_t netOffset = mPrimGridSize + mClsGridSize;
+    CUDA_CHECK_THROW(cudaMemsetAsync(params_full_precision, 0, sizeof(float) * (padUp(mPrimGridSize, 16) + padUp(mClsGridSize, 16))));
+    uint32_t netOffset = padUp(mPrimGridSize, 16) + padUp(mClsGridSize, 16);
     mpNet->initialize_params(rnd, params_full_precision + netOffset, scale);
 }
 
 template<typename T>
 size_t NeuralConeModel<T>::n_params() const {
-    return mPrimGridSize + mClsGridSize + mpNet->n_params();
+    return padUp(mPrimGridSize, 16) + padUp(mClsGridSize, 16) + mpNet->n_params();
 }
 
 template<typename T>

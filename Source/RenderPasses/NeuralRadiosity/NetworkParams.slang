@@ -5,7 +5,7 @@
 #endif
 
 #ifndef N_FEATURES_PER_LEVEL
-#define N_FEATURES_PER_LEVEL 4
+#define N_FEATURES_PER_LEVEL 2
 #endif
 
 #ifndef N_LEVELS_SPEC
@@ -13,7 +13,7 @@
 #endif
 
 #ifndef N_FEATURES_PER_LEVEL_SPEC
-#define N_FEATURES_PER_LEVEL_SPEC 8
+#define N_FEATURES_PER_LEVEL_SPEC 4
 #endif
 
 #ifndef NUM_CLUSTERS

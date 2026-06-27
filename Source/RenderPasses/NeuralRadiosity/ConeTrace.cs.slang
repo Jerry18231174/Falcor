@@ -1,5 +1,6 @@
 import Scene.Shading;
 import Scene.RaytracingInline;
+import Rendering.Materials.IsotropicGGX;
 import PathState;
 import RayTraceHelper;
 import NetworkParams;
@@ -528,6 +529,59 @@ struct ConeTrace
         GroupMemoryBarrierWithGroupSync();
     }
 
+    float2 hammersleySample(in uint2 index, in float2 randomOffset)
+    {
+        // index = (i, N)
+        float2 u = {};
+        u.y = (float(index.x) + 0.5f) / float(index.y);
+
+        uint bits = index.x;
+        bits = (bits << 16u) | (bits >> 16u);
+        bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+        bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+        bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+        bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+        u.x = float(bits) * 2.3283064365386963e-10; // / 0x100000000
+
+        // u += clamp(0.01 * (randomOffset - 0.5f), float2(1e-3f, 1e-3f), float2(0.999f, 0.999f));
+
+        return u;
+    }
+
+    bool stratifiedSample(in ShadingData sd, in float alpha, in uint2 index, in SampleGenerator sg, out BSDFSample result)
+    {
+        float3 wi = sd.frame.toLocal(sd.V);
+        float3 wo = {};
+
+        {
+            // Default initialization to avoid divergence at returns.
+            result.weight = {};
+            result.pdf = 0.f;
+            result.lobeType = (uint)LobeType::SpecularReflection;
+
+            if (wi.z < kMinCosTheta)
+                return false;
+
+            // Sample the GGX distribution to find a microfacet normal (half vector).
+            float3 h = sampleGGX_NDF(alpha, hammersleySample(index, sampleNext2D(sg)), result.pdf); // pdf = D(h) * h.z
+            // float3 h = sampleGGX_NDF(alpha, sampleNext2D(sg), result.pdf); // pdf = D(h) * h.z
+
+            // Reflect the incident direction to find the outgoing direction.
+            float wiDotH = dot(wi, h);
+            wo = 2.f * wiDotH * h - wi;
+            if (wo.z < kMinCosTheta)
+                return false;
+
+            result.pdf /= (4.f * wiDotH); // Jacobian of the reflection operator.
+        }
+
+        result.wo = sd.frame.fromLocal(wo);
+
+        if (!isValidHemisphereReflectionOrTransmission(sd, sd.frame, wi, wo, result.wo)) return false;
+
+        return true;
+    }
+
     void loadGroupData(const uint pixIdx, const uint threadIdx)
     {
         if (threadIdx == 0)
@@ -569,12 +623,21 @@ struct ConeTrace
         uint2 pixel = specPixel[pixIdx];
         pixel.y = pixel.y * numSpecRays + threadIdx;
 
-        SampleGenerator sg = SampleGenerator(pixel, (enableTemporalHistory != 0) ? batchCount : 0);
+        SampleGenerator sg = SampleGenerator(pixel, 0);
 
         BSDFSample result = {};
         bool valid = false;
-        for (int i = 0; i < 10 && !valid; ++i) {
-            valid = mi.sample(sd, sg, result);
+        for (int i = 0; i < 10 && !valid; ++i)
+        {
+            if (false)
+            {
+                float alpha = bsdfProperties.roughness * bsdfProperties.roughness;
+                valid = stratifiedSample(sd, alpha, uint2(threadIdx, numSpecRays), sg, result);
+            }
+            else
+            {
+                valid = mi.sample(sd, sg, result);
+            }
             // valid = valid && (dot(result.wo, reflect(-sd.V, sd.frame.N)) > cosLobe);
         }
         if (!valid) return false;

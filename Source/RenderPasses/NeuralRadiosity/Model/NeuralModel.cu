@@ -222,7 +222,7 @@ json NeuralModel<T>::hyperparams() const {
 template<typename T>
 void NeuralModel<T>::set_params_impl(T* params, T* inference_params, T* gradients) {
     uint32_t gridsOffset = 0;
-    uint32_t netOffset = gridsOffset + mGridSize;
+    uint32_t netOffset = gridsOffset + padUp(mGridSize, 16);
 
     mpGrids = params + gridsOffset;
     mpGridsInference = inference_params + gridsOffset;
@@ -232,13 +232,13 @@ void NeuralModel<T>::set_params_impl(T* params, T* inference_params, T* gradient
 
 template<typename T>
 void NeuralModel<T>::initialize_params(pcg32& rnd, float* params_full_precision, float scale) {
-    CUDA_CHECK_THROW(cudaMemsetAsync(params_full_precision, 0, sizeof(float) * mGridSize));
-    mpNet->initialize_params(rnd, params_full_precision + mGridSize, scale);
+    CUDA_CHECK_THROW(cudaMemsetAsync(params_full_precision, 0, sizeof(float) * padUp(mGridSize, 16)));
+    mpNet->initialize_params(rnd, params_full_precision + padUp(mGridSize, 16), scale);
 }
 
 template<typename T>
 size_t NeuralModel<T>::n_params() const {
-    return mGridSize + mpNet->n_params();
+    return padUp(mGridSize, 16) + mpNet->n_params();
 }
 
 template<typename T>

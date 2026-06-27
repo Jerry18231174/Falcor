@@ -27,11 +27,11 @@
 
 namespace HashGrid {
     struct Config {
-        uint32_t nLevels = 4;
-        uint32_t nFeaturesPerLevel = 8;
-        uint32_t log2HashMapSize = 19;
-        uint32_t baseResolution = 32;
-        float perLevelScale = 2.0f;
+        uint32_t nLevels;
+        uint32_t nFeaturesPerLevel;
+        uint32_t log2HashMapSize;
+        uint32_t baseResolution;
+        float perLevelScale;
     };
 
     void initializeConstants(const Config& config);
