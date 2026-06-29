@@ -9,7 +9,7 @@
 #endif
 
 #ifndef N_LEVELS_SPEC
-#define N_LEVELS_SPEC 8
+#define N_LEVELS_SPEC 6
 #endif
 
 #ifndef N_FEATURES_PER_LEVEL_SPEC

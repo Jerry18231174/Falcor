@@ -22,12 +22,10 @@ namespace {
 }
 
 NRModel::NRModel() {
-    CUDA_CHECK_THROW(cudaStreamCreate(&mStream));
+    CUDA_CHECK_THROW(cudaStreamCreate(&mTrainStream));
+    CUDA_CHECK_THROW(cudaStreamCreate(&mInferenceStream));
 
     createOnlineModels();
-
-    mpdLdDiffInput = std::make_shared<tcnn::GPUMemory<float>>(mDiffInputDim * padUp(pixelCount, 256));
-    mpdLdSpecInput = std::make_shared<tcnn::GPUMemory<float>>(mSpecInputDim * padUp(pixelCount, 256));
 
     mpDiffNet = mpDiffOnlineNet.get();
     mpSpecNet = mpSpecOnlineNet.get();
@@ -112,13 +110,16 @@ NRModel::~NRModel() {
     mpSpecOfflineNet.reset();
     mpSpecOnlineNet.reset();
 
-    if (mStream) {
-        CUDA_CHECK_THROW(cudaStreamDestroy(mStream));
+    if (mTrainStream) {
+        CUDA_CHECK_THROW(cudaStreamDestroy(mTrainStream));
+    }
+    if (mInferenceStream) {
+        CUDA_CHECK_THROW(cudaStreamDestroy(mInferenceStream));
     }
 }
 
 void NRModel::saveState(const std::string& path) {
-    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
 
     tcnn::json ckpt;
     ckpt["format"] = "nr_tcnn_ckpt_v1";
@@ -139,7 +140,7 @@ void NRModel::loadState(const std::string& path) {
     mpDiffTrainer->deserialize(ckpt.at("diff"));
     mpSpecTrainer->deserialize(ckpt.at("spec"));
 
-    CUDA_CHECK_THROW(cudaStreamSynchronize(mStream));
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
 }
 
 void NRModel::setOnline(bool online)
@@ -178,10 +179,10 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     tcnn::GPUMatrix<float> specOutput(specPtrs.outputPtr, mOutputDim, specBatchSize);
 
     if (diffBatchSize > 0) {
-        mpDiffNet->inference(mStream, diffInput, diffOutput);
+        mpDiffNet->inference(mInferenceStream, diffInput, diffOutput);
     }
     if (specBatchSize > 0) {
-        mpSpecNet->inference(mStream, specInput, specOutput);
+        mpSpecNet->inference(mInferenceStream, specInput, specOutput);
     }
 }
 
@@ -194,13 +195,10 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     tcnn::GPUMatrix<float> diffOutput(diffPtrs.outputPtr, mOutputDim, diffBatchSize);
     tcnn::GPUMatrix<float> specOutput(specPtrs.outputPtr, mOutputDim, specBatchSize);
 
-    tcnn::GPUMatrix<float> dLdDiffInput(mpdLdDiffInput->data(), mDiffInputDim, diffBatchSize);
-    tcnn::GPUMatrix<float> dLdSpecInput(mpdLdSpecInput->data(), mSpecInputDim, specBatchSize);
-
     if (diffBatchSize > 0) {
-        mpDiffTrainer->training_step(mStream, diffInput, diffOutput, nullptr, true, &dLdDiffInput);
+        mpDiffTrainer->training_step(mTrainStream, diffInput, diffOutput, nullptr, true, nullptr);
     }
     if (specBatchSize > 0) {
-        mpSpecTrainer->training_step(mStream, specInput, specOutput, nullptr, true, &dLdSpecInput);
+        mpSpecTrainer->training_step(mTrainStream, specInput, specOutput, nullptr, true, nullptr);
     }
 }

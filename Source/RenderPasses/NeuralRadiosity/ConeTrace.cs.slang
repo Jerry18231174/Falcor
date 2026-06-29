@@ -55,7 +55,7 @@ struct TemporalSpecHistory
 RWStructuredBuffer<uint2> specPixel;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<SpecNetInput> specInput;
-RWStructuredBuffer<TemporalSpecHistory> temporalHistory;
+// RWStructuredBuffer<TemporalSpecHistory> temporalHistory;
 
 
 groupshared ShadingData sd;
@@ -168,366 +168,366 @@ struct ConeTrace
     static const uint kConeTraceReuseModeTemporalToHistory = 1;
     static const uint kConeTraceReuseModeScreenSpaceDenoise = 2;
 
-    void sortClusters(const uint threadIdx)
-    {
-        if (threadIdx == 0)
-        {
-            for (uint i = 0; i + 1 < numClusters; ++i)
-            {
-                for (uint j = 0; j + i + 1 < numClusters; ++j)
-                {
-                    bool swapClusters = false;
-                    const bool leftActive = gsCounts[j] > 0;
-                    const bool rightActive = gsCounts[j + 1] > 0;
+    // void sortClusters(const uint threadIdx)
+    // {
+    //     if (threadIdx == 0)
+    //     {
+    //         for (uint i = 0; i + 1 < numClusters; ++i)
+    //         {
+    //             for (uint j = 0; j + i + 1 < numClusters; ++j)
+    //             {
+    //                 bool swapClusters = false;
+    //                 const bool leftActive = gsCounts[j] > 0;
+    //                 const bool rightActive = gsCounts[j + 1] > 0;
 
-                    if (!leftActive && rightActive)
-                    {
-                        swapClusters = true;
-                    }
-                    else if (leftActive == rightActive && gsCenters[j] > gsCenters[j + 1])
-                    {
-                        swapClusters = true;
-                    }
+    //                 if (!leftActive && rightActive)
+    //                 {
+    //                     swapClusters = true;
+    //                 }
+    //                 else if (leftActive == rightActive && gsCenters[j] > gsCenters[j + 1])
+    //                 {
+    //                     swapClusters = true;
+    //                 }
 
-                    if (swapClusters)
-                    {
-                        const float center = gsCenters[j];
-                        gsCenters[j] = gsCenters[j + 1];
-                        gsCenters[j + 1] = center;
+    //                 if (swapClusters)
+    //                 {
+    //                     const float center = gsCenters[j];
+    //                     gsCenters[j] = gsCenters[j + 1];
+    //                     gsCenters[j + 1] = center;
 
-                        const float var = gsVars[j];
-                        gsVars[j] = gsVars[j + 1];
-                        gsVars[j + 1] = var;
+    //                     const float var = gsVars[j];
+    //                     gsVars[j] = gsVars[j + 1];
+    //                     gsVars[j + 1] = var;
 
-                        const uint count = gsCounts[j];
-                        gsCounts[j] = gsCounts[j + 1];
-                        gsCounts[j + 1] = count;
-                    }
-                }
-            }
-        }
+    //                     const uint count = gsCounts[j];
+    //                     gsCounts[j] = gsCounts[j + 1];
+    //                     gsCounts[j + 1] = count;
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        GroupMemoryBarrierWithGroupSync();
-    }
+    //     GroupMemoryBarrierWithGroupSync();
+    // }
 
-    bool hasActiveHistoryClusters()
-    {
-        [unroll]
-        for (uint k = 0; k < numClusters; ++k)
-        {
-            if (gsHistoryActive[k] != 0)
-            {
-                return true;
-            }
-        }
+    // bool hasActiveHistoryClusters()
+    // {
+    //     [unroll]
+    //     for (uint k = 0; k < numClusters; ++k)
+    //     {
+    //         if (gsHistoryActive[k] != 0)
+    //         {
+    //             return true;
+    //         }
+    //     }
 
-        return false;
-    }
+    //     return false;
+    // }
 
-    bool hasEmptyHistoryClusters()
-    {
-        [unroll]
-        for (uint k = 0; k < numClusters; ++k)
-        {
-            if (gsHistoryActive[k] == 0)
-            {
-                return true;
-            }
-        }
+    // bool hasEmptyHistoryClusters()
+    // {
+    //     [unroll]
+    //     for (uint k = 0; k < numClusters; ++k)
+    //     {
+    //         if (gsHistoryActive[k] == 0)
+    //         {
+    //             return true;
+    //         }
+    //     }
 
-        return false;
-    }
+    //     return false;
+    // }
 
-    int findNearestCluster(float rayT)
-    {
-        int bestK = 0;
-        float bestDist = fabs(rayT - gsCenters[0]);
+    // int findNearestCluster(float rayT)
+    // {
+    //     int bestK = 0;
+    //     float bestDist = fabs(rayT - gsCenters[0]);
 
-        [unroll]
-        for (uint k = 1; k < numClusters; ++k)
-        {
-            const float dist = fabs(rayT - gsCenters[k]);
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                bestK = (int) k;
-            }
-        }
+    //     [unroll]
+    //     for (uint k = 1; k < numClusters; ++k)
+    //     {
+    //         const float dist = fabs(rayT - gsCenters[k]);
+    //         if (dist < bestDist)
+    //         {
+    //             bestDist = dist;
+    //             bestK = (int) k;
+    //         }
+    //     }
 
-        return bestK;
-    }
+    //     return bestK;
+    // }
 
-    void seedEmptyHistoryClusters(const uint threadIdx, float rayT, bool valid)
-    {
-        uint laneIdx = WaveGetLaneIndex();
-        uint waveIdx = threadIdx / waveSize;
-        uint numWaves = (numSpecRays + waveSize - 1) / waveSize;
+    // void seedEmptyHistoryClusters(const uint threadIdx, float rayT, bool valid)
+    // {
+    //     uint laneIdx = WaveGetLaneIndex();
+    //     uint waveIdx = threadIdx / waveSize;
+    //     uint numWaves = (numSpecRays + waveSize - 1) / waveSize;
 
-        float waveMin = WaveActiveMin(valid ? rayT : FLT_MAX);
-        float waveMax = WaveActiveMax(valid ? rayT : -FLT_MAX);
+    //     float waveMin = WaveActiveMin(valid ? rayT : FLT_MAX);
+    //     float waveMax = WaveActiveMax(valid ? rayT : -FLT_MAX);
 
-        if (WaveIsFirstLane())
-        {
-            gsWaveMin[waveIdx] = waveMin;
-            gsWaveMax[waveIdx] = waveMax;
-        }
-        GroupMemoryBarrierWithGroupSync();
+    //     if (WaveIsFirstLane())
+    //     {
+    //         gsWaveMin[waveIdx] = waveMin;
+    //         gsWaveMax[waveIdx] = waveMax;
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
 
-        if (waveIdx == 0)
-        {
-            float bMin = FLT_MAX;
-            float bMax = -FLT_MAX;
+    //     if (waveIdx == 0)
+    //     {
+    //         float bMin = FLT_MAX;
+    //         float bMax = -FLT_MAX;
 
-            if (laneIdx < numWaves)
-            {
-                bMin = gsWaveMin[laneIdx];
-                bMax = gsWaveMax[laneIdx];
-            }
+    //         if (laneIdx < numWaves)
+    //         {
+    //             bMin = gsWaveMin[laneIdx];
+    //             bMax = gsWaveMax[laneIdx];
+    //         }
 
-            bMin = WaveActiveMin(bMin);
-            bMax = WaveActiveMax(bMax);
+    //         bMin = WaveActiveMin(bMin);
+    //         bMax = WaveActiveMax(bMax);
 
-            if (laneIdx == 0 && bMin <= bMax)
-            {
-                uint emptyCount = 0;
-                [unroll]
-                for (uint k = 0; k < numClusters; ++k)
-                {
-                    if (gsHistoryActive[k] == 0) emptyCount++;
-                }
+    //         if (laneIdx == 0 && bMin <= bMax)
+    //         {
+    //             uint emptyCount = 0;
+    //             [unroll]
+    //             for (uint k = 0; k < numClusters; ++k)
+    //             {
+    //                 if (gsHistoryActive[k] == 0) emptyCount++;
+    //             }
 
-                uint emptyRank = 0;
-                [unroll]
-                for (uint k = 0; k < numClusters; ++k)
-                {
-                    if (gsHistoryActive[k] == 0)
-                    {
-                        const float t = ((float) emptyRank + 0.5f) / max((float) emptyCount, 1.0f);
-                        gsCenters[k] = lerp(bMin, bMax, t);
-                        emptyRank++;
-                    }
-                }
-            }
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+    //             uint emptyRank = 0;
+    //             [unroll]
+    //             for (uint k = 0; k < numClusters; ++k)
+    //             {
+    //                 if (gsHistoryActive[k] == 0)
+    //                 {
+    //                     const float t = ((float) emptyRank + 0.5f) / max((float) emptyCount, 1.0f);
+    //                     gsCenters[k] = lerp(bMin, bMax, t);
+    //                     emptyRank++;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
+    // }
 
-    void refineEmptyHistoryClusters(const uint threadIdx, float rayT, bool valid)
-    {
-        for (uint iter = 0; iter < numKMeansIters; ++iter)
-        {
-            if (threadIdx < numClusters)
-            {
-                gsNewCenters[threadIdx] = 0.0f;
-                gsCounts[threadIdx] = 0;
-            }
-            GroupMemoryBarrierWithGroupSync();
+    // void refineEmptyHistoryClusters(const uint threadIdx, float rayT, bool valid)
+    // {
+    //     for (uint iter = 0; iter < numKMeansIters; ++iter)
+    //     {
+    //         if (threadIdx < numClusters)
+    //         {
+    //             gsNewCenters[threadIdx] = 0.0f;
+    //             gsCounts[threadIdx] = 0;
+    //         }
+    //         GroupMemoryBarrierWithGroupSync();
 
-            const int bestK = findNearestCluster(rayT);
-            gsClusterIdx[threadIdx] = bestK;
-            InterlockedAdd(gsCounts[bestK], valid ? 1 : 0);
+    //         const int bestK = findNearestCluster(rayT);
+    //         gsClusterIdx[threadIdx] = bestK;
+    //         InterlockedAdd(gsCounts[bestK], valid ? 1 : 0);
 
-            [unroll]
-            for (uint k = 0; k < numClusters; ++k)
-            {
-                const bool inCluster = valid && (bestK == (int) k);
-                const float sum = GroupActiveSum(inCluster ? rayT : 0.0f, threadIdx, numSpecRays);
+    //         [unroll]
+    //         for (uint k = 0; k < numClusters; ++k)
+    //         {
+    //             const bool inCluster = valid && (bestK == (int) k);
+    //             const float sum = GroupActiveSum(inCluster ? rayT : 0.0f, threadIdx, numSpecRays);
 
-                if (threadIdx == 0)
-                {
-                    gsNewCenters[k] = sum;
-                }
-            }
-            GroupMemoryBarrierWithGroupSync();
+    //             if (threadIdx == 0)
+    //             {
+    //                 gsNewCenters[k] = sum;
+    //             }
+    //         }
+    //         GroupMemoryBarrierWithGroupSync();
 
-            if (threadIdx < numClusters && gsHistoryActive[threadIdx] == 0 && gsCounts[threadIdx] > 0)
-            {
-                gsCenters[threadIdx] = gsNewCenters[threadIdx] / (float) gsCounts[threadIdx];
-            }
-            GroupMemoryBarrierWithGroupSync();
-        }
-    }
+    //         if (threadIdx < numClusters && gsHistoryActive[threadIdx] == 0 && gsCounts[threadIdx] > 0)
+    //         {
+    //             gsCenters[threadIdx] = gsNewCenters[threadIdx] / (float) gsCounts[threadIdx];
+    //         }
+    //         GroupMemoryBarrierWithGroupSync();
+    //     }
+    // }
 
-    void computeCurrentClusterStats(const uint threadIdx, float rayT, bool valid)
-    {
-        if (threadIdx < numClusters)
-        {
-            gsNewCenters[threadIdx] = 0.0f;
-            gsCounts[threadIdx] = 0;
-        }
-        GroupMemoryBarrierWithGroupSync();
+    // void computeCurrentClusterStats(const uint threadIdx, float rayT, bool valid)
+    // {
+    //     if (threadIdx < numClusters)
+    //     {
+    //         gsNewCenters[threadIdx] = 0.0f;
+    //         gsCounts[threadIdx] = 0;
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
 
-        const int bestK = findNearestCluster(rayT);
-        gsClusterIdx[threadIdx] = bestK;
-        InterlockedAdd(gsCounts[bestK], valid ? 1 : 0);
+    //     const int bestK = findNearestCluster(rayT);
+    //     gsClusterIdx[threadIdx] = bestK;
+    //     InterlockedAdd(gsCounts[bestK], valid ? 1 : 0);
 
-        [unroll]
-        for (uint k = 0; k < numClusters; ++k)
-        {
-            const bool inCluster = valid && (bestK == (int) k);
-            const float sum = GroupActiveSum(inCluster ? rayT : 0.0f, threadIdx, numSpecRays);
+    //     [unroll]
+    //     for (uint k = 0; k < numClusters; ++k)
+    //     {
+    //         const bool inCluster = valid && (bestK == (int) k);
+    //         const float sum = GroupActiveSum(inCluster ? rayT : 0.0f, threadIdx, numSpecRays);
 
-            if (threadIdx == 0)
-            {
-                gsNewCenters[k] = sum;
-            }
-        }
-        GroupMemoryBarrierWithGroupSync();
+    //         if (threadIdx == 0)
+    //         {
+    //             gsNewCenters[k] = sum;
+    //         }
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
 
-        if (threadIdx < numClusters)
-        {
-            const float count = (float) gsCounts[threadIdx];
-            if (count > 0.0f)
-            {
-                gsNewCenters[threadIdx] /= count;
-            }
-            gsVars[threadIdx] = 0.0f;
-        }
-        GroupMemoryBarrierWithGroupSync();
+    //     if (threadIdx < numClusters)
+    //     {
+    //         const float count = (float) gsCounts[threadIdx];
+    //         if (count > 0.0f)
+    //         {
+    //             gsNewCenters[threadIdx] /= count;
+    //         }
+    //         gsVars[threadIdx] = 0.0f;
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
 
-        const int assignedK = gsClusterIdx[threadIdx];
-        const float diff = valid ? (rayT - gsNewCenters[assignedK]) : 0.0f;
+    //     const int assignedK = gsClusterIdx[threadIdx];
+    //     const float diff = valid ? (rayT - gsNewCenters[assignedK]) : 0.0f;
 
-        [unroll]
-        for (uint k = 0; k < numClusters; ++k)
-        {
-            const bool inCluster = valid && (assignedK == (int) k);
-            const float sum = GroupActiveSum(inCluster ? diff * diff : 0.0f, threadIdx, numSpecRays);
+    //     [unroll]
+    //     for (uint k = 0; k < numClusters; ++k)
+    //     {
+    //         const bool inCluster = valid && (assignedK == (int) k);
+    //         const float sum = GroupActiveSum(inCluster ? diff * diff : 0.0f, threadIdx, numSpecRays);
 
-            if (threadIdx == 0)
-            {
-                gsVars[k] = sum;
-            }
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+    //         if (threadIdx == 0)
+    //         {
+    //             gsVars[k] = sum;
+    //         }
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
+    // }
 
-    void mergeCurrentClustersWithHistory(const uint pixIdx, const uint threadIdx)
-    {
-        if (threadIdx == 0)
-        {
-            const float kMaxTemporalCount = 102400.0f;
-            TemporalSpecHistory history = temporalHistory[pixIdx];
+    // void mergeCurrentClustersWithHistory(const uint pixIdx, const uint threadIdx)
+    // {
+    //     if (threadIdx == 0)
+    //     {
+    //         const float kMaxTemporalCount = 102400.0f;
+    //         TemporalSpecHistory history = temporalHistory[pixIdx];
 
-            [unroll]
-            for (uint k = 0; k < numClusters; ++k)
-            {
-                const float curCount = (float) gsCounts[k];
-                const float curMean = gsCenters[k];
-                const float curM2 = gsVars[k];
-                const float prevCount = min(history.count[k], kMaxTemporalCount);
-                const float prevMean = history.mean[k];
-                const float prevStd = max(history.std[k], 0.0f);
-                const float prevM2 = prevStd * prevStd * prevCount;
+    //         [unroll]
+    //         for (uint k = 0; k < numClusters; ++k)
+    //         {
+    //             const float curCount = (float) gsCounts[k];
+    //             const float curMean = gsCenters[k];
+    //             const float curM2 = gsVars[k];
+    //             const float prevCount = min(history.count[k], kMaxTemporalCount);
+    //             const float prevMean = history.mean[k];
+    //             const float prevStd = max(history.std[k], 0.0f);
+    //             const float prevM2 = prevStd * prevStd * prevCount;
 
-                float outCount = 0.0f;
-                float outMean = 0.0f;
-                float outM2 = 0.0f;
+    //             float outCount = 0.0f;
+    //             float outMean = 0.0f;
+    //             float outM2 = 0.0f;
 
-                if (prevCount > 0.0f)
-                {
-                    if (curCount > 0.0f)
-                    {
-                        const float mergedCount = prevCount + curCount;
-                        const float delta = curMean - prevMean;
-                        const float mergedMean = (prevMean * prevCount + curMean * curCount) / mergedCount;
-                        const float mergedM2 = prevM2 + curM2; // + delta * delta * prevCount * curCount / mergedCount;
-                        const float countScale = min(kMaxTemporalCount / mergedCount, 1.0f);
+    //             if (prevCount > 0.0f)
+    //             {
+    //                 if (curCount > 0.0f)
+    //                 {
+    //                     const float mergedCount = prevCount + curCount;
+    //                     const float delta = curMean - prevMean;
+    //                     const float mergedMean = (prevMean * prevCount + curMean * curCount) / mergedCount;
+    //                     const float mergedM2 = prevM2 + curM2; // + delta * delta * prevCount * curCount / mergedCount;
+    //                     const float countScale = min(kMaxTemporalCount / mergedCount, 1.0f);
 
-                        outCount = mergedCount * countScale;
-                        outMean = mergedMean;
-                        outM2 = mergedM2 * countScale;
-                    }
-                    else
-                    {
-                        outCount = prevCount;
-                        outMean = prevMean;
-                        outM2 = prevM2;
-                    }
-                }
-                else if (curCount > 0.0f)
-                {
-                    outCount = curCount;
-                    outMean = curMean;
-                    outM2 = curM2;
-                }
+    //                     outCount = mergedCount * countScale;
+    //                     outMean = mergedMean;
+    //                     outM2 = mergedM2 * countScale;
+    //                 }
+    //                 else
+    //                 {
+    //                     outCount = prevCount;
+    //                     outMean = prevMean;
+    //                     outM2 = prevM2;
+    //                 }
+    //             }
+    //             else if (curCount > 0.0f)
+    //             {
+    //                 outCount = curCount;
+    //                 outMean = curMean;
+    //                 outM2 = curM2;
+    //             }
 
-                gsCounts[k] = (uint) (outCount + 0.5f);
-                gsCenters[k] = outMean;
-                gsVars[k] = outM2;
-            }
-        }
+    //             gsCounts[k] = (uint) (outCount + 0.5f);
+    //             gsCenters[k] = outMean;
+    //             gsVars[k] = outM2;
+    //         }
+    //     }
 
-        GroupMemoryBarrierWithGroupSync();
-    }
+    //     GroupMemoryBarrierWithGroupSync();
+    // }
 
-    void clusterToHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
-    {
-        if (threadIdx < numClusters)
-        {
-            TemporalSpecHistory history = temporalHistory[pixIdx];
-            gsCenters[threadIdx] = history.mean[threadIdx];
-            gsHistoryActive[threadIdx] = history.count[threadIdx] > 0.0f ? 1u : 0u;
-        }
-        GroupMemoryBarrierWithGroupSync();
+    // void clusterToHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
+    // {
+    //     if (threadIdx < numClusters)
+    //     {
+    //         TemporalSpecHistory history = temporalHistory[pixIdx];
+    //         gsCenters[threadIdx] = history.mean[threadIdx];
+    //         gsHistoryActive[threadIdx] = history.count[threadIdx] > 0.0f ? 1u : 0u;
+    //     }
+    //     GroupMemoryBarrierWithGroupSync();
 
-        if (!hasActiveHistoryClusters())
-        {
-            kMeansInt(threadIdx, rayT, valid);
-            return;
-        }
+    //     if (!hasActiveHistoryClusters())
+    //     {
+    //         kMeansInt(threadIdx, rayT, valid);
+    //         return;
+    //     }
 
-        if (hasEmptyHistoryClusters())
-        {
-            seedEmptyHistoryClusters(threadIdx, rayT, valid);
-            refineEmptyHistoryClusters(threadIdx, rayT, valid);
-        }
+    //     if (hasEmptyHistoryClusters())
+    //     {
+    //         seedEmptyHistoryClusters(threadIdx, rayT, valid);
+    //         refineEmptyHistoryClusters(threadIdx, rayT, valid);
+    //     }
 
-        computeCurrentClusterStats(threadIdx, rayT, valid);
+    //     computeCurrentClusterStats(threadIdx, rayT, valid);
 
-        if (threadIdx < numClusters)
-        {
-            gsCenters[threadIdx] = gsNewCenters[threadIdx];
-        }
+    //     if (threadIdx < numClusters)
+    //     {
+    //         gsCenters[threadIdx] = gsNewCenters[threadIdx];
+    //     }
 
-        GroupMemoryBarrierWithGroupSync();
-        mergeCurrentClustersWithHistory(pixIdx, threadIdx);
-    }
+    //     GroupMemoryBarrierWithGroupSync();
+    //     mergeCurrentClustersWithHistory(pixIdx, threadIdx);
+    // }
 
-    void clusterCurrentThenMergeHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
-    {
-        kMeansInt(threadIdx, rayT, valid);
-        sortClusters(threadIdx);
-        mergeCurrentClustersWithHistory(pixIdx, threadIdx);
-    }
+    // void clusterCurrentThenMergeHistory(const uint pixIdx, const uint threadIdx, float rayT, bool valid)
+    // {
+    //     kMeansInt(threadIdx, rayT, valid);
+    //     sortClusters(threadIdx);
+    //     mergeCurrentClustersWithHistory(pixIdx, threadIdx);
+    // }
 
-    void accumulateTemporal(const uint pixIdx, const uint threadIdx)
-    {
-        sortClusters(threadIdx);
+    // void accumulateTemporal(const uint pixIdx, const uint threadIdx)
+    // {
+    //     sortClusters(threadIdx);
 
-        if (enableTemporalHistory == 0)
-        {
-            return;
-        }
+    //     if (enableTemporalHistory == 0)
+    //     {
+    //         return;
+    //     }
 
-        if (threadIdx == 0)
-        {
-            TemporalSpecHistory history = temporalHistory[pixIdx];
+    //     if (threadIdx == 0)
+    //     {
+    //         TemporalSpecHistory history = temporalHistory[pixIdx];
 
-            [unroll]
-            for (uint k = 0; k < numClusters; ++k)
-            {
-                const float count = (float) gsCounts[k];
-                history.mean[k] = gsCenters[k];
-                history.std[k] = sqrt(gsVars[k] / max(count, 1.0f));
-                history.count[k] = count;
-            }
+    //         [unroll]
+    //         for (uint k = 0; k < numClusters; ++k)
+    //         {
+    //             const float count = (float) gsCounts[k];
+    //             history.mean[k] = gsCenters[k];
+    //             history.std[k] = sqrt(gsVars[k] / max(count, 1.0f));
+    //             history.count[k] = count;
+    //         }
 
-            temporalHistory[pixIdx] = history;
-        }
+    //         temporalHistory[pixIdx] = history;
+    //     }
 
-        GroupMemoryBarrierWithGroupSync();
-    }
+    //     GroupMemoryBarrierWithGroupSync();
+    // }
 
     float2 hammersleySample(in uint2 index, in float2 randomOffset)
     {

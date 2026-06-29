@@ -7,12 +7,12 @@ def render_graph_PathTracer():
     g.addPass(NeuralRadiosity, "NeuralRadiosity")
     ToneMapper = createPass("ToneMapper", {'autoExposure': False, 'exposureCompensation': 0.0})
     g.addPass(ToneMapper, "ToneMapper")
-    OptixDenoiser = createPass("OptixDenoiser", {'enabled': False})
-    g.addPass(OptixDenoiser, "Denoiser")
+    # OptixDenoiser = createPass("OptixDenoiser", {'enabled': False})
+    # g.addPass(OptixDenoiser, "Denoiser")
 
-    # g.addEdge("NeuralRadiosity.color", "ToneMapper.src")
-    g.addEdge("NeuralRadiosity.color", "Denoiser.color")
-    g.addEdge("Denoiser.output", "ToneMapper.src")
+    g.addEdge("NeuralRadiosity.color", "ToneMapper.src")
+    # g.addEdge("NeuralRadiosity.color", "Denoiser.color")
+    # g.addEdge("Denoiser.output", "ToneMapper.src")
 
     g.markOutput("ToneMapper.dst")
 

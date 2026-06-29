@@ -68,7 +68,7 @@ public:
     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
 
-    cudaStream_t stream() const { return mStream; }
+    cudaStream_t stream(bool isTraining) const { return isTraining ? mTrainStream : mInferenceStream; }
 
 private:
     void createOnlineModels();
@@ -86,11 +86,9 @@ private:
     std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpSpecOnlineTrainer;
     tcnn::Trainer<float, precision_t, precision_t>* mpDiffTrainer = nullptr;
     tcnn::Trainer<float, precision_t, precision_t>* mpSpecTrainer = nullptr;
-    cudaStream_t mStream;
+    cudaStream_t mInferenceStream;
+    cudaStream_t mTrainStream;
     bool mOnline = false;
-
-    std::shared_ptr<tcnn::GPUMemory<float>> mpdLdDiffInput;
-    std::shared_ptr<tcnn::GPUMemory<float>> mpdLdSpecInput;
 
     uint32_t pixelCount = 1u << 20;
     uint32_t numClusters = 4;
@@ -102,12 +100,12 @@ private:
     uint32_t baseResolution = 32;
     float perLevelScale = 2.0f;
 
-    uint32_t nInterpLevels = 8;
+    uint32_t nInterpLevels = 6;
     uint32_t nInterpFeaturesPerLevel = 4;
     uint32_t log2InterpHashMapSize = 19;
-    uint32_t baseInterpResolution = 4;
+    uint32_t baseInterpResolution = 16;
     float perLevelInterpScale = 2.0f;
-    float interpRatio = 0.5f;
+    float interpRatio = 1.0f;
 
     const tcnn::json mOfflineOptConfig = {
         {"otype", "Adam"},

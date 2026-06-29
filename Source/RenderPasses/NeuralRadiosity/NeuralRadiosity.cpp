@@ -44,6 +44,7 @@ namespace
     const std::string kFirstSmoothPassFile = "RenderPasses/NeuralRadiosity/FirstSmoothPass.cs.slang";
     const std::string kCompactPassFile = "RenderPasses/NeuralRadiosity/CompactPass.cs.slang";
     const std::string kResolvePassFile = "RenderPasses/NeuralRadiosity/ResolvePass.cs.slang";
+    const std::string kPostFilterPassFile = "RenderPasses/NeuralRadiosity/PostFilterPass.cs.slang";
 
     const std::string kRandomSmoothFile = "RenderPasses/NeuralRadiosity/RandomSmooth.cs.slang";
     const std::string kSampleRHSFile = "RenderPasses/NeuralRadiosity/SampleRHS.cs.slang";
@@ -148,16 +149,16 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
 
     mVarsChanged = false;
 
-    // Render the scene.
-    if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
-    {
-        render(pRenderContext, renderData);
-    }
-
     // Train the model.
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
         train(pRenderContext);
+    }
+
+    // Render the scene.
+    if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
+    {
+        render(pRenderContext, renderData);
     }
 
     mFrameCount++;
@@ -264,6 +265,11 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
             clearRenderTemporalHistory(mpDevice->getRenderContext());
         }
     }
+
+    if (widget.checkbox("Post Filter", mEnablePostFilter))
+    {
+        mVarsChanged = true;
+    }
 }
 
 void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -306,6 +312,8 @@ void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& re
     modelInferenceCUDA(pRenderContext, mpRenderBatch);
     // Resolve pass.
     resolvePass(pRenderContext, renderData);
+    // Post-process filtering pass.
+    postFilterPass(pRenderContext, renderData);
 }
 
 void NeuralRadiosity::train(RenderContext* pRenderContext)
@@ -443,7 +451,8 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     var["specColor"] = mpRenderBatch->specColor;
     var["specVBuffer"] = mpRenderBatch->specVBuffer;
 
-    var["temporalHistory"] = mpRenderSpecTemporalHistory;
+    // var["temporalHistory"] = mpRenderSpecTemporalHistory;
+    var["tempColor"] = mpRenderTempColor;
 
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
         var["debug"] = mpTrainRHSBatch->emission;
@@ -451,8 +460,36 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     mpResolvePass->execute(pRenderContext, uint3(mFrameDim, 1));
 }
 
+void NeuralRadiosity::postFilterPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "PostFilterPass");
+
+    if (!mEnablePostFilter)
+        return;
+
+    ShaderVar var = mpPostFilterPass->getRootVar();
+    const auto name = "gPostFilterPass";
+    bindScreenData(var, renderData, name);
+
+    var[name]["kernelRadius"] = 3;
+    var[name]["sigmaSpatial"] = 4.0f;
+    var[name]["sigmaNormal"] = 0.05f;
+    var[name]["sigmaAlbedo"] = 0.02f;
+    var[name]["sigmaColor"] = 2.0f;
+
+    var["diffActive"] = mpRenderBatch->diffActive;
+    var["diffIndex"] = mpRenderBatch->diffIndex;
+    var["specActive"] = mpRenderBatch->specActive;
+    var["specIndex"] = mpRenderBatch->specIndex;
+    var["tempColor"] = mpRenderTempColor;
+
+    mpPostFilterPass->execute(pRenderContext, uint3(mFrameDim, 1));
+}
+
 void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
+    FALCOR_PROFILE(pRenderContext, "RandomSmooth");
+
     // Sample a random camera (offline training)
     if (mRenderMode == RenderMode::Train && (mTrainCameras.size() > 0))
     {
@@ -471,6 +508,8 @@ void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_pt
 
 void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "SampleRHS");
+
     ShaderVar var = mpSampleRHS->getRootVar();
     const auto name = "gSampleRHS";
 
@@ -524,6 +563,8 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
 
 void NeuralRadiosity::resolveRHS(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "ResolveRHS");
+
     ShaderVar var = mpResolveRHS->getRootVar();
     const auto name = "gResolveRHS";
     
@@ -535,6 +576,8 @@ void NeuralRadiosity::resolveRHS(RenderContext* pRenderContext)
 
 void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
+    FALCOR_PROFILE(pRenderContext, "CompactBatch");
+
     // Prefix sum from active mask to index
     mpPrefixSum->execute(
         pRenderContext,
@@ -563,6 +606,8 @@ void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_pt
 
 void NeuralRadiosity::resolveBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
+    FALCOR_PROFILE(pRenderContext, "ResolveBatch");
+
     ShaderVar var = mpResolveBatch->getRootVar();
     bindRayBatchData(var, pRayBatch, "gResolveBatch");
 
@@ -571,7 +616,7 @@ void NeuralRadiosity::resolveBatch(RenderContext* pRenderContext, std::shared_pt
 
 void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
-    FALCOR_PROFILE(pRenderContext, "coneTrace");
+    FALCOR_PROFILE(pRenderContext, "ConeTrace");
 
     ShaderVar var = mpConeTrace->getRootVar();
     const auto name = "gConeTrace";
@@ -588,7 +633,7 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
     var["specPixel"] = pRayBatch->specPixel;
     var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specInput"] = pRayBatch->specInput;
-    var["temporalHistory"] = mpRenderSpecTemporalHistory;
+    // var["temporalHistory"] = mpRenderSpecTemporalHistory;
     var[name]["enableTemporalHistory"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse) ? 1u : 0u;
     var[name]["useTemporalReuse"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse && mRenderSpecTemporalHistoryValid) ? 1u : 0u;
     var[name]["coneTraceReuseMode"] = (uint32_t)mConeTraceReuseMode;
@@ -605,48 +650,20 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
 
 void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
-    FALCOR_ASSERT(pRenderContext);
-    FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA");
+    FALCOR_PROFILE(pRenderContext, "ModelInferenceCUDA");
 
-    {
-        FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA.waitForFalcor");
-        // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
-        pRenderContext->waitForFalcor(mpNRModel->stream());
-    }
-
-    {
-        FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA.inference");
-        mpNRModel->inference(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
-    }
-
-    {
-        FALCOR_PROFILE(pRenderContext, "modelInferenceCUDA.waitForCuda");
-        // Synchronize CUDA->Falcor so following passes see CUDA writes.
-        pRenderContext->waitForCuda(mpNRModel->stream());
-    }
+    pRenderContext->waitForFalcor(mpNRModel->stream(false));
+    mpNRModel->inference(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+    pRenderContext->waitForCuda(mpNRModel->stream(false));
 }
 
 void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
-    FALCOR_ASSERT(pRenderContext);
-    FALCOR_PROFILE(pRenderContext, "modelTrainCUDA");
+    FALCOR_PROFILE(pRenderContext, "ModelTrainCUDA");
 
-    {
-        FALCOR_PROFILE(pRenderContext, "modelTrainCUDA.waitForFalcor");
-        // Synchronize Falcor->CUDA before touching the shared buffer on CUDA.
-        pRenderContext->waitForFalcor(mpNRModel->stream());
-    }
-
-    {
-        FALCOR_PROFILE(pRenderContext, "modelTrainCUDA.train");
-        mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
-    }
-    
-    {
-        FALCOR_PROFILE(pRenderContext, "modelTrainCUDA.waitForCuda");
-        // Synchronize CUDA->Falcor so following passes see CUDA writes.
-        pRenderContext->waitForCuda(mpNRModel->stream());
-    }
+    pRenderContext->waitForFalcor(mpNRModel->stream(true));
+    mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
+    pRenderContext->waitForCuda(mpNRModel->stream(true));
 }
 
 void NeuralRadiosity::updateFrameDim(const uint2 frameDim)
@@ -718,6 +735,19 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
 
         // Bind static resources
         ShaderVar var = mpResolvePass->getRootVar();
+        mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
+    }
+
+    if (!mpPostFilterPass)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kPostFilterPassFile).csEntry("main");
+
+        mpPostFilterPass = ComputePass::create(mpDevice, desc, defines, true);
+
+        // Bind static resources
+        ShaderVar var = mpPostFilterPass->getRootVar();
         mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
         mpSampleGenerator->bindShaderData(var);
     }
@@ -843,20 +873,29 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
         mpTrainRHSBatch->resize(mBatchSize * mNumRHS, mNumClusters);
     }
 
-    const uint32_t historySize = mpRenderBatch ? mpRenderBatch->size : 0u;
-    if (historySize > 0 && (!mpRenderSpecTemporalHistory || mpRenderSpecTemporalHistory->getElementCount() != historySize))
+    // const uint32_t historySize = mpRenderBatch ? mpRenderBatch->size : 0u;
+    // if (historySize > 0 && (!mpRenderSpecTemporalHistory || mpRenderSpecTemporalHistory->getElementCount() != historySize))
+    // {
+    //     ShaderVar coneTraceVar = mpConeTrace->getRootVar();
+    //     mpRenderSpecTemporalHistory = mpDevice->createStructuredBuffer(
+    //         coneTraceVar["temporalHistory"],
+    //         historySize,
+    //         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+    //         MemoryType::DeviceLocal,
+    //         nullptr,
+    //         false
+    //     );
+    //     clearRenderTemporalHistory(pRenderContext);
+    //     mHasRenderCameraViewProj = false;
+    // }
+
+    if (!mpRenderTempColor ||
+        mpRenderTempColor->getWidth() != mFrameDim.x ||
+        mpRenderTempColor->getHeight() != mFrameDim.y)
     {
-        ShaderVar coneTraceVar = mpConeTrace->getRootVar();
-        mpRenderSpecTemporalHistory = mpDevice->createStructuredBuffer(
-            coneTraceVar["temporalHistory"],
-            historySize,
-            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-            MemoryType::DeviceLocal,
-            nullptr,
-            false
-        );
-        clearRenderTemporalHistory(pRenderContext);
-        mHasRenderCameraViewProj = false;
+        mpRenderTempColor = mpDevice->createTexture2D(
+            mFrameDim.x, mFrameDim.y, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
     }
 
     const auto endTime = std::chrono::steady_clock::now();

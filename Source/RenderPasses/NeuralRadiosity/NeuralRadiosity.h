@@ -302,6 +302,7 @@ private:
     void firstSmoothPass(RenderContext* pRenderContext, const RenderData& renderData);
     void compactPass(RenderContext* pRenderContext, const RenderData& renderData);
     void resolvePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void postFilterPass(RenderContext* pRenderContext, const RenderData& renderData);
     // Ray-batch rendering passes
     void randomSmooth(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void sampleRHS(RenderContext* pRenderContext);
@@ -357,6 +358,8 @@ private:
     bool mEnableRenderSpecTemporalReuse = true;
     /// Strategy for integrating the current frame's depth samples with temporal specular clusters.
     ConeTraceReuseMode mConeTraceReuseMode = ConeTraceReuseMode::TemporalToHistory;
+    /// Post filter switch
+    bool mEnablePostFilter = true;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
@@ -370,6 +373,7 @@ private:
     std::shared_ptr<RayBatchBuffer> mpTrainLHSBatch;
     std::shared_ptr<RayBatchBuffer> mpTrainRHSBatch;
     ref<Buffer> mpRenderSpecTemporalHistory;
+    ref<Texture> mpRenderTempColor;
     bool mRenderSpecTemporalHistoryValid = false;
     bool mHasRenderCameraViewProj = false;
     float4x4 mRenderCameraViewProj = float4x4();
@@ -379,6 +383,7 @@ private:
     ref<ComputePass> mpFirstSmoothPass;
     ref<ComputePass> mpCompactPass;
     ref<ComputePass> mpResolvePass;
+    ref<ComputePass> mpPostFilterPass;
     ref<ComputePass> mpRandomSmooth;
     ref<ComputePass> mpSampleRHS;
     ref<ComputePass> mpResolveRHS;
